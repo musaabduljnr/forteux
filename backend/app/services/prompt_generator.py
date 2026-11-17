@@ -1,6 +1,6 @@
 import json
 from typing import TYPE_CHECKING, Any
-from app.db.models import Audit, Finding, ScreenAsset
+from app.db.models import Audit, AuditScreen, Finding, ScreenAsset
 
 if TYPE_CHECKING:
     from app.services.knowledge_retrieval import RetrievedChunk
@@ -221,3 +221,211 @@ class StitchPromptGenerator:
         )
 
         return "\n\n".join(sections)
+
+    def generate_multi_screen_prompt(
+        self,
+        audit: Audit,
+        screens: list[tuple[AuditScreen, ScreenAsset | None]],
+        selected_findings: list[Finding],
+        journey_report: dict[str, Any] | None = None,
+        user_instructions: str | None = None,
+        retrieved_knowledge: list["RetrievedChunk"] | None = None,
+    ) -> str:
+        if not selected_findings:
+            raise ValueError("Cannot generate Google Stitch prompt with zero selected findings.")
+
+        # Severity ranking for prioritization
+        severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+        sorted_findings = sorted(
+            selected_findings,
+            key=lambda f: severity_order.get(f.severity.lower(), 4),
+        )
+
+        # Context extraction
+        audit_context: dict[str, Any] = {}
+        if getattr(audit, "context_json", None):
+            try:
+                audit_context = json.loads(audit.context_json)
+            except Exception:
+                pass
+
+        product_name = audit_context.get("product") or audit.name or "User Journey"
+        journey_name = audit_context.get("journey_name") or audit.name or "Primary Workflow"
+        goal = audit_context.get("objective") or audit_context.get("goal") or "End-to-end task completion"
+        audience = audit_context.get("intended_user") or audit_context.get("audience") or "Application users"
+        start_point = audit_context.get("start_point") or "Initial entry screen"
+        end_state = audit_context.get("end_state") or "Final confirmation state"
+
+        # Separate findings by scope
+        screen_findings = [f for f in sorted_findings if getattr(f, "scope", "screen_level") == "screen_level"]
+        cross_findings = [f for f in sorted_findings if getattr(f, "scope", "screen_level") == "cross_screen"]
+
+        # Map screen IDs to labels
+        screen_map: dict[str, str] = {}
+        screen_sequence_lines: list[str] = []
+        for idx, (audit_scr, asset) in enumerate(screens, 1):
+            s_id = str(audit_scr.id)
+            label = audit_scr.screen_label or f"Screen {idx}"
+            screen_map[s_id] = label
+            dim_str = f" ({asset.width_px}x{asset.height_px}px)" if asset and asset.width_px and asset.height_px else ""
+            desc = f" — {audit_scr.screen_description}" if audit_scr.screen_description else ""
+            screen_sequence_lines.append(f"{idx}. **{label}**{dim_str}{desc}")
+
+        sections = []
+
+        # 1. Role & Multi-Screen Objective
+        sections.append(
+            f"# Google Stitch Multi-Screen Redesign Brief: {journey_name} ({product_name})\n\n"
+            f"## 1. Role & Objective\n"
+            f"You are a Principal Product Designer, Flow Architect, and Google Stitch prompt engineer. "
+            f"Your task is to redesign the complete {len(screens)}-screen user journey to eliminate the "
+            f"{len(sorted_findings)} selected usability, cross-screen consistency, and visual hierarchy issues. "
+            f"Treat all {len(screens)} uploaded screenshots as connected steps of ONE cohesive product experience."
+        )
+
+        # 2. Product & Journey Context
+        sections.append(
+            f"## 2. Product & User Journey Context\n"
+            f"- **Product / Ecosystem**: {product_name}\n"
+            f"- **Workflow Name**: {journey_name}\n"
+            f"- **Target User**: {audience}\n"
+            f"- **Journey Objective**: {goal}\n"
+            f"- **Entry Point**: {start_point}\n"
+            f"- **Intended Completion**: {end_state}"
+        )
+
+        # 3. Screen Sequence Overview
+        sections.append(
+            f"## 3. Screen Sequence Overview\n"
+            f"The journey consists of the following {len(screens)} screens in explicit chronological order:\n"
+            + "\n".join(screen_sequence_lines)
+        )
+
+        # 4. Cross-Screen Continuity & Navigation Issues
+        if cross_findings:
+            cross_blocks = []
+            for idx, finding in enumerate(cross_findings, 1):
+                affected_ids = []
+                try:
+                    affected_ids = json.loads(finding.affected_screen_ids_json) if isinstance(finding.affected_screen_ids_json, str) else (finding.affected_screen_ids_json or [])
+                except Exception:
+                    pass
+                affected_labels = [screen_map.get(s_id, f"Screen ({s_id[:8]})") for s_id in affected_ids]
+                affected_str = ", ".join(affected_labels) if affected_labels else "Entire sequence"
+
+                cross_blocks.append(
+                    f"### Cross-Screen Issue {idx}: {finding.title} [{finding.severity.upper()}]\n"
+                    f"- **Category**: {finding.category.replace('_', ' ').title()}\n"
+                    f"- **Affected Screens**: {affected_str}\n"
+                    f"- **Cross-Screen Inconsistency**: {finding.description}\n"
+                    f"- **Visual Comparison**: {finding.evidence}\n"
+                    f"- **Why It Matters**: {finding.why_it_matters}\n"
+                    f"- **Required Cohesive Fix**: {finding.recommended_fix}\n"
+                    f"- **Design Principle**: {finding.design_principle or 'Cross-Screen Cohesion'}"
+                )
+            sections.append(
+                f"## 4. Cross-Screen Continuity & Consistency Fixes\n"
+                f"Address these flow-level discrepancies across the relevant screens:\n\n"
+                + "\n\n".join(cross_blocks)
+            )
+
+        # 5. Screen-Level Usability & Visual Fixes
+        if screen_findings:
+            scr_blocks = []
+            for idx, finding in enumerate(screen_findings, 1):
+                # Map location
+                locations = []
+                try:
+                    boxes = json.loads(finding.bounding_boxes_json) if isinstance(finding.bounding_boxes_json, str) else finding.bounding_boxes_json
+                    if isinstance(boxes, list) and boxes:
+                        for b in boxes:
+                            scr_label = screen_map.get(b.get("screen_id", ""), "")
+                            loc = describe_region(b)
+                            locations.append(f"{scr_label}: {loc}" if scr_label else loc)
+                except Exception:
+                    pass
+                loc_str = "; ".join(locations) if locations else "Specific screen interface region"
+
+                scr_blocks.append(
+                    f"### Screen Issue {idx}: {finding.title} [{finding.severity.upper()}]\n"
+                    f"- **Target Area**: {loc_str}\n"
+                    f"- **Existing Problem**: {finding.description}\n"
+                    f"- **Visual Evidence**: {finding.evidence}\n"
+                    f"- **Why It Matters**: {finding.why_it_matters}\n"
+                    f"- **Required Improvement**: {finding.recommended_fix}"
+                )
+            sections.append(
+                f"## 5. Screen-Specific Usability & Visual Polish\n\n"
+                + "\n\n".join(scr_blocks)
+            )
+
+        # 6. Overall Journey Assessment & High-Level Directives
+        if journey_report and isinstance(journey_report, dict):
+            summary = journey_report.get("journey_summary", "")
+            assessment = journey_report.get("overall_assessment", "")
+            improvements = journey_report.get("recommended_improvements", [])
+            imp_lines = "\n".join(f"- {imp}" for imp in improvements) if improvements else "- Unify visual patterns across all screens."
+            sections.append(
+                f"## 6. Flow Cohesion & Journey Guidelines\n"
+                f"- **Flow Assessment**: {assessment or summary}\n"
+                f"- **Global Flow Recommendations**:\n{imp_lines}"
+            )
+
+        # 7. Navigation & Progression Architecture
+        sections.append(
+            f"## 7. Navigation & Progression Architecture\n"
+            f"- **Predictable Action Anchoring**: Primary progression actions ('Continue', 'Submit', 'Next') must occupy a consistent location across every screen.\n"
+            f"- **Clear Backward Navigation**: Provide unambiguous back affordances allowing users to review earlier selections without state disruption.\n"
+            f"- **Progress Visibility**: Include clear step indicators or contextual breadcrumbs to reassure users of their position in the flow.\n"
+            f"- **No Dead Ends**: Every screen must provide an obvious forward path or clear escape/cancel action."
+        )
+
+        # 8. User-Specified Design Instructions (if provided)
+        if user_instructions and user_instructions.strip():
+            sections.append(
+                f"## 8. User-Specified Design Instructions\n"
+                f"Incorporate these explicit design preferences across all redesigned screens:\n"
+                f"{user_instructions.strip()}"
+            )
+
+        # 9. Applied Design References (Knowledge Library grounding)
+        if retrieved_knowledge:
+            ref_items = []
+            for chunk in retrieved_knowledge[:5]:
+                page_info = f", Page {chunk.page_start}" if chunk.page_start else ""
+                heading_info = f" ({chunk.section_heading})" if chunk.section_heading else ""
+                clean_text = chunk.text.replace("\n", " ").strip()
+                if len(clean_text) > 200:
+                    clean_text = clean_text[:197] + "..."
+                ref_items.append(
+                    f"- **{chunk.document_name}**{heading_info}{page_info}:\n"
+                    f'  > "{clean_text}"'
+                )
+            sections.append(
+                "## 9. Applied Design References (Knowledge Base)\n"
+                "Align all redesigned screens with these authoritative design guidelines:\n"
+                + "\n".join(ref_items)
+            )
+
+        # 10. Strict Multi-Screen Constraints
+        sections.append(
+            f"## 10. Strict Multi-Screen Design Constraints\n"
+            f"- **Cohesive Multi-Screen Redesign**: Do not fix one screen in isolation if the solution produces visual or navigation discrepancies with adjacent screens.\n"
+            f"- **Preserve Flow Logic**: Maintain the established step sequence and business logic ({start_point} to {end_state}).\n"
+            f"- **No Arbitrary Feature Injection**: Do not introduce unrequested intermediate modals, marketing banners, or features not in the flow.\n"
+            f"- **Consistent UI Tokens**: Maintain uniform button heights, corner radii, typography scales, and color values across every screen in the journey."
+        )
+
+        # 11. Expected Multi-Screen Output & Google Stitch Handoff
+        sections.append(
+            f"## 11. Expected Multi-Screen Output for Google Stitch\n"
+            f"Generate an aligned, multi-screen redesign spanning all {len(screens)} screens with complete cross-screen consistency.\n\n"
+            f"> **Critical Handoff Instructions for Google Stitch**:\n"
+            f"> 1. Provide ALL {len(screens)} original screenshots to Google Stitch in the defined sequence order.\n"
+            f"> 2. Instruct Stitch to evaluate and redesign the screenshots as a linked multi-screen flow.\n"
+            f"> 3. Paste this complete brief into Stitch's prompt window to guide the generative redesign.\n"
+            f"> 4. Verify that component styles, colors, and button placements remain uniform across all generated screens."
+        )
+
+        return "\n\n".join(sections)
+

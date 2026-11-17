@@ -155,3 +155,81 @@ export interface DesignSystem {
   projectId: string;
   status: "empty" | "available";
 }
+
+// ---------------------------------------------------------------------------
+// Phase 07 — Multi-Screen Flow Types
+// ---------------------------------------------------------------------------
+
+export interface MultiScreenBoundingBox {
+  screen_id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface AuditScreen {
+  id: string;
+  audit_id: string;
+  screen_asset_id: string;
+  sequence_index: number;
+  screen_label?: string | null;
+  screen_description?: string | null;
+  width_px?: number | null;
+  height_px?: number | null;
+  download_url?: string | null;
+  created_at: string;
+}
+
+export interface JourneyStrength {
+  title: string;
+  description: string;
+}
+
+export interface FrictionPoint {
+  title: string;
+  description: string;
+  affected_screens: string[];
+  severity: "critical" | "high" | "medium" | "low";
+}
+
+export interface JourneyReport {
+  journey_summary: string;
+  apparent_structure: string;
+  overall_assessment: string;
+  strengths: JourneyStrength[];
+  major_friction_points: FrictionPoint[];
+  recommended_improvements: string[];
+  limitations: string;
+}
+
+export interface MultiScreenFinding {
+  id: string;
+  audit_id: string;
+  scope: "screen_level" | "cross_screen";
+  affected_screen_ids: string[];
+  category: string;
+  title: string;
+  description: string;
+  why_it_matters: string;
+  recommended_fix: string;
+  design_principle?: string | null;
+  severity: "critical" | "high" | "medium" | "low";
+  confidence: number;
+  evidence_type: "observed" | "inferred";
+  evidence: string;
+  bounding_boxes: MultiScreenBoundingBox[];
+  limitations?: string | null;
+  created_at: string;
+}
+
+export interface FlowReport {
+  job_id: string;
+  status: string;
+  journey_report?: JourneyReport | null;
+  screen_level_findings: MultiScreenFinding[];
+  cross_screen_findings: MultiScreenFinding[];
+  created_at: string;
+  completed_at?: string | null;
+}
+

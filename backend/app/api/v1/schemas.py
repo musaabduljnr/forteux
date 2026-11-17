@@ -109,6 +109,7 @@ class AuditScreenRead(BaseModel):
     screen_asset_id: UUID
     sequence_index: int
     screen_label: str | None = None
+    screen_description: str | None = None
     width_px: int | None = None
     height_px: int | None = None
     download_url: str | None = None
@@ -143,6 +144,8 @@ class FindingEvidenceRead(BaseModel):
 class FindingRead(BaseModel):
     id: UUID
     audit_id: UUID
+    scope: str = "screen_level"
+    affected_screen_ids: list[str] = Field(default_factory=list)
     category: str
     title: str
     description: str
@@ -166,6 +169,7 @@ class AnalysisJobRead(BaseModel):
     provider: str
     model: str
     summary: str | None = None
+    flow_report_json: str | None = None
     error_message: str | None = None
     created_at: datetime
     completed_at: datetime | None = None
@@ -319,4 +323,97 @@ class KnowledgeSearchResult(BaseModel):
     section_heading: str | None = None
     score: float
     retrieval_rank: int
+
+
+# ---------------------------------------------------------------------------
+# Phase 07 — Multi-Screen Flow Schemas
+# ---------------------------------------------------------------------------
+
+
+class AuditScreenUpdate(BaseModel):
+    screen_label: str | None = Field(default=None, max_length=200)
+    screen_description: str | None = Field(default=None, max_length=2000)
+    sequence_index: int | None = Field(default=None, ge=0)
+
+
+class ScreenReorderItem(BaseModel):
+    screen_id: UUID
+    sequence_index: int = Field(ge=0)
+
+
+class AuditScreenReorderRequest(BaseModel):
+    screens: list[ScreenReorderItem] = Field(min_length=1)
+
+
+class AuditContextUpdate(BaseModel):
+    context: dict[str, str] = Field(default_factory=dict)
+
+
+class MultiScreenBoundingBoxRead(BaseModel):
+    screen_id: str
+    x: float
+    y: float
+    width: float
+    height: float
+
+
+class JourneyStrengthRead(BaseModel):
+    title: str
+    description: str
+
+
+class FrictionPointRead(BaseModel):
+    title: str
+    description: str
+    affected_screens: list[str] = Field(default_factory=list)
+    severity: str
+
+
+class JourneyReportRead(BaseModel):
+    journey_summary: str
+    apparent_structure: str
+    overall_assessment: str
+    strengths: list[JourneyStrengthRead]
+    major_friction_points: list[FrictionPointRead]
+    recommended_improvements: list[str]
+    limitations: str
+
+
+class MultiScreenFindingRead(BaseModel):
+    id: UUID
+    audit_id: UUID
+    scope: str
+    affected_screen_ids: list[str] = Field(default_factory=list)
+    category: str
+    title: str
+    description: str
+    why_it_matters: str
+    recommended_fix: str
+    design_principle: str | None = None
+    severity: str
+    confidence: float
+    evidence_type: str
+    evidence: str
+    bounding_boxes: list[MultiScreenBoundingBoxRead] = Field(default_factory=list)
+    limitations: str | None = None
+    evidence_sources: list[FindingEvidenceRead] = Field(default_factory=list)
+    created_at: datetime
+
+
+class MultiScreenAnalysisResponse(BaseModel):
+    job: AnalysisJobRead
+    journey_report: JourneyReportRead
+    screen_level_findings: list[MultiScreenFindingRead]
+    cross_screen_findings: list[MultiScreenFindingRead]
+
+
+class FlowReportRead(BaseModel):
+    job_id: UUID
+    status: str
+    journey_report: JourneyReportRead | None = None
+    screen_level_findings: list[MultiScreenFindingRead] = Field(default_factory=list)
+    cross_screen_findings: list[MultiScreenFindingRead] = Field(default_factory=list)
+    created_at: datetime
+    completed_at: datetime | None = None
+
 

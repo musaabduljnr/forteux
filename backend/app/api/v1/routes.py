@@ -15,22 +15,32 @@ from app.api.v1.schemas import (
     AnalysisResponse,
     AssetDownloadRead,
     AssetRead,
+    AuditContextUpdate,
     AuditCreate,
     AuditRead,
     AuditScreenCreate,
     AuditScreenRead,
+    AuditScreenReorderRequest,
+    AuditScreenUpdate,
     BoundingBoxRead,
     DevTokenRequest,
     DevTokenResponse,
     DocumentVersionRead,
     FindingEvidenceRead,
     FindingRead,
+    FlowReportRead,
+    FrictionPointRead,
+    JourneyReportRead,
+    JourneyStrengthRead,
     KnowledgeCompleteRequest,
     KnowledgeDocumentRead,
     KnowledgeSearchRequest,
     KnowledgeSearchResult,
     KnowledgeUploadIntentRead,
     KnowledgeUploadIntentRequest,
+    MultiScreenAnalysisResponse,
+    MultiScreenBoundingBoxRead,
+    MultiScreenFindingRead,
     ProjectCreate,
     ProjectRead,
     PromptGenerateRequest,
@@ -64,6 +74,11 @@ from app.services.document_extractor import SUPPORTED_MIME_TYPES
 from app.services.image import ImageValidationError, validate_and_process_image
 from app.services.knowledge_pipeline import KnowledgePipeline
 from app.services.knowledge_retrieval import KnowledgeRetrieval
+from app.services.multi_screen_vision import (
+    MultiScreenAIVisionService,
+    ScreenContext,
+    get_multi_screen_vision_service,
+)
 from app.services.prompt_generator import StitchPromptGenerator
 from app.services.storage import S3Storage, get_storage
 
@@ -535,6 +550,7 @@ def attach_screen_to_audit(
         screen_asset_id=screen.screen_asset_id,
         sequence_index=screen.sequence_index,
         screen_label=screen.screen_label,
+        screen_description=screen.screen_description,
         width_px=asset.width_px,
         height_px=asset.height_px,
         download_url=download_url,
@@ -574,6 +590,7 @@ def list_audit_screens(
                 screen_asset_id=s.screen_asset_id,
                 sequence_index=s.sequence_index,
                 screen_label=s.screen_label,
+                screen_description=s.screen_description,
                 width_px=asset.width_px if asset else None,
                 height_px=asset.height_px if asset else None,
                 download_url=download_url,
@@ -772,27 +789,98 @@ def _populate_finding_reads(findings: list[Finding], db: Session) -> list[Findin
     for ev in evidence_rows:
         evidence_map.setdefault(ev.finding_id, []).append(FindingEvidenceRead.model_validate(ev))
 
-    return [
-        FindingRead(
-            id=f.id,
-            audit_id=f.audit_id,
-            category=f.category,
-            title=f.title,
-            description=f.description,
-            why_it_matters=f.why_it_matters,
-            recommended_fix=f.recommended_fix,
-            design_principle=f.design_principle,
-            severity=f.severity,
-            confidence=f.confidence,
-            evidence_type=f.evidence_type,
-            evidence=f.evidence,
-            bounding_boxes=[BoundingBoxRead(**b) for b in json.loads(f.bounding_boxes_json)],
-            evidence_sources=evidence_map.get(f.id, []),
-            limitations=f.limitations,
-            created_at=f.created_at,
+    result = []
+    for f in findings:
+        boxes_raw = json.loads(f.bounding_boxes_json or "[]")
+        boxes = [
+            BoundingBoxRead(
+                x=float(b.get("x", 0.0)),
+                y=float(b.get("y", 0.0)),
+                width=float(b.get("width", 0.0)),
+                height=float(b.get("height", 0.0)),
+            )
+            for b in boxes_raw
+        ]
+        scope = getattr(f, "scope", "screen_level") or "screen_level"
+        affected = json.loads(getattr(f, "affected_screen_ids_json", None) or "[]")
+        result.append(
+            FindingRead(
+                id=f.id,
+                audit_id=f.audit_id,
+                scope=scope,
+                affected_screen_ids=affected,
+                category=f.category,
+                title=f.title,
+                description=f.description,
+                why_it_matters=f.why_it_matters,
+                recommended_fix=f.recommended_fix,
+                design_principle=f.design_principle,
+                severity=f.severity,
+                confidence=f.confidence,
+                evidence_type=f.evidence_type,
+                evidence=f.evidence,
+                bounding_boxes=boxes,
+                evidence_sources=evidence_map.get(f.id, []),
+                limitations=f.limitations,
+                created_at=f.created_at,
+            )
         )
-        for f in findings
-    ]
+    return result
+
+
+def _populate_multi_screen_finding_reads(findings: list[Finding], db: Session) -> list[MultiScreenFindingRead]:
+    if not findings:
+        return []
+    finding_ids = [f.id for f in findings]
+    evidence_rows = list(
+        db.scalars(
+            select(FindingEvidence)
+            .where(FindingEvidence.finding_id.in_(finding_ids))
+            .order_by(FindingEvidence.retrieval_rank.asc())
+        )
+    )
+    evidence_map: dict[UUID, list[FindingEvidenceRead]] = {}
+    for ev in evidence_rows:
+        evidence_map.setdefault(ev.finding_id, []).append(FindingEvidenceRead.model_validate(ev))
+
+    result = []
+    for f in findings:
+        boxes_raw = json.loads(f.bounding_boxes_json or "[]")
+        boxes = [
+            MultiScreenBoundingBoxRead(
+                screen_id=str(b.get("screen_id", "")),
+                x=float(b.get("x", 0.0)),
+                y=float(b.get("y", 0.0)),
+                width=float(b.get("width", 0.0)),
+                height=float(b.get("height", 0.0)),
+            )
+            for b in boxes_raw
+        ]
+        affected = json.loads(getattr(f, "affected_screen_ids_json", None) or "[]")
+        scope = getattr(f, "scope", "screen_level") or "screen_level"
+        result.append(
+            MultiScreenFindingRead(
+                id=f.id,
+                audit_id=f.audit_id,
+                scope=scope,
+                affected_screen_ids=affected,
+                category=f.category,
+                title=f.title,
+                description=f.description,
+                why_it_matters=f.why_it_matters,
+                recommended_fix=f.recommended_fix,
+                design_principle=f.design_principle,
+                severity=f.severity,
+                confidence=f.confidence,
+                evidence_type=f.evidence_type,
+                evidence=f.evidence,
+                bounding_boxes=boxes,
+                evidence_sources=evidence_map.get(f.id, []),
+                limitations=f.limitations,
+                created_at=f.created_at,
+            )
+        )
+    return result
 
 
 @router.get("/projects/{project_id}/audits/{audit_id}/findings", response_model=list[FindingRead])
@@ -914,13 +1002,41 @@ def generate_audit_prompt(
 
     # Generate Google Stitch prompt
     generator = StitchPromptGenerator()
-    generated_content = generator.generate_prompt(
-        audit=audit,
-        screen=screen_asset,
-        selected_findings=found_findings,
-        user_instructions=payload.user_instructions,
-        retrieved_knowledge=retrieved_knowledge,
-    )
+    if audit.mode == "multi":
+        screens_db = list(
+            db.scalars(
+                select(AuditScreen)
+                .where(AuditScreen.audit_id == audit.id, AuditScreen.tenant_id == principal.tenant_id)
+                .order_by(AuditScreen.sequence_index.asc())
+            )
+        )
+        screens_with_assets = [(s, db.get(ScreenAsset, s.screen_asset_id)) for s in screens_db]
+        latest_job = db.scalar(
+            select(AnalysisJob)
+            .where(
+                AnalysisJob.audit_id == audit.id,
+                AnalysisJob.tenant_id == principal.tenant_id,
+                AnalysisJob.status == "completed",
+            )
+            .order_by(AnalysisJob.created_at.desc())
+        )
+        flow_report_dict = json.loads(latest_job.flow_report_json) if latest_job and latest_job.flow_report_json else {}
+        generated_content = generator.generate_multi_screen_prompt(
+            audit=audit,
+            screens=screens_with_assets,
+            selected_findings=found_findings,
+            journey_report=flow_report_dict,
+            user_instructions=payload.user_instructions,
+            retrieved_knowledge=retrieved_knowledge,
+        )
+    else:
+        generated_content = generator.generate_prompt(
+            audit=audit,
+            screen=screen_asset,
+            selected_findings=found_findings,
+            user_instructions=payload.user_instructions,
+            retrieved_knowledge=retrieved_knowledge,
+        )
 
     selected_ids_json = json.dumps([str(fid) for fid in payload.selected_finding_ids])
     existing_prompt = db.scalar(
@@ -1063,6 +1179,498 @@ def restore_original_prompt(
     db.commit()
     db.refresh(prompt)
     return _prompt_to_read(prompt, db)
+
+
+# ===========================================================================
+# Phase 07: Multi-Screen & User Flow Endpoints
+# ===========================================================================
+
+
+@router.patch("/projects/{project_id}/audits/{audit_id}/screens/{screen_id}", response_model=AuditScreenRead)
+def update_audit_screen(
+    project_id: UUID,
+    audit_id: UUID,
+    screen_id: UUID,
+    body: AuditScreenUpdate,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+    storage: S3Storage = Depends(get_storage),
+) -> AuditScreenRead:
+    _project_or_404(db, project_id, principal)
+    screen = db.scalar(
+        select(AuditScreen).where(
+            AuditScreen.id == screen_id,
+            AuditScreen.audit_id == audit_id,
+            AuditScreen.tenant_id == principal.tenant_id,
+        )
+    )
+    if screen is None:
+        raise HTTPException(status_code=404, detail={"code": "screen_not_found", "message": "Audit screen not found"})
+
+    if body.screen_label is not None:
+        screen.screen_label = body.screen_label
+    if body.screen_description is not None:
+        screen.screen_description = body.screen_description
+    if body.sequence_index is not None and body.sequence_index != screen.sequence_index:
+        conflict = db.scalar(
+            select(AuditScreen).where(
+                AuditScreen.audit_id == audit_id,
+                AuditScreen.tenant_id == principal.tenant_id,
+                AuditScreen.sequence_index == body.sequence_index,
+                AuditScreen.id != screen.id,
+            )
+        )
+        if conflict:
+            temp_idx = -9999
+            conflict.sequence_index = temp_idx
+            db.flush()
+            conflict.sequence_index = screen.sequence_index
+            screen.sequence_index = body.sequence_index
+        else:
+            screen.sequence_index = body.sequence_index
+
+    db.commit()
+    db.refresh(screen)
+
+    asset = db.get(ScreenAsset, screen.screen_asset_id)
+    download_url = None
+    if asset:
+        try:
+            download_url = storage.presign_download(asset.object_key, asset.original_filename)
+        except Exception:
+            pass
+
+    return AuditScreenRead(
+        id=screen.id,
+        audit_id=screen.audit_id,
+        screen_asset_id=screen.screen_asset_id,
+        sequence_index=screen.sequence_index,
+        screen_label=screen.screen_label,
+        screen_description=screen.screen_description,
+        width_px=asset.width_px if asset else None,
+        height_px=asset.height_px if asset else None,
+        download_url=download_url,
+        created_at=screen.created_at,
+    )
+
+
+@router.delete("/projects/{project_id}/audits/{audit_id}/screens/{screen_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_screen_from_audit(
+    project_id: UUID,
+    audit_id: UUID,
+    screen_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> Response:
+    _project_or_404(db, project_id, principal)
+    audit = db.scalar(
+        select(Audit).where(
+            Audit.id == audit_id,
+            Audit.project_id == project_id,
+            Audit.tenant_id == principal.tenant_id,
+            Audit.deleted_at.is_(None),
+        )
+    )
+    if audit is None:
+        raise HTTPException(status_code=404, detail={"code": "audit_not_found", "message": "Audit not found"})
+
+    if audit.mode == "single":
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "single_screen_limit", "message": "Cannot remove screenshot from single-screen audit"},
+        )
+
+    screen = db.scalar(
+        select(AuditScreen).where(
+            AuditScreen.id == screen_id,
+            AuditScreen.audit_id == audit_id,
+            AuditScreen.tenant_id == principal.tenant_id,
+        )
+    )
+    if screen is None:
+        raise HTTPException(status_code=404, detail={"code": "screen_not_found", "message": "Audit screen not found"})
+
+    db.delete(screen)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/projects/{project_id}/audits/{audit_id}/screens/reorder", response_model=list[AuditScreenRead])
+def reorder_audit_screens(
+    project_id: UUID,
+    audit_id: UUID,
+    payload: AuditScreenReorderRequest,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+    storage: S3Storage = Depends(get_storage),
+) -> list[AuditScreenRead]:
+    _project_or_404(db, project_id, principal)
+    audit = db.scalar(
+        select(Audit).where(
+            Audit.id == audit_id,
+            Audit.project_id == project_id,
+            Audit.tenant_id == principal.tenant_id,
+            Audit.deleted_at.is_(None),
+        )
+    )
+    if audit is None:
+        raise HTTPException(status_code=404, detail={"code": "audit_not_found", "message": "Audit not found"})
+
+    indices = [item.sequence_index for item in payload.screens]
+    if len(indices) != len(set(indices)):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "duplicate_sequence_index", "message": "Duplicate sequence indices in reorder request"},
+        )
+
+    existing_screens = {
+        s.id: s
+        for s in db.scalars(
+            select(AuditScreen).where(
+                AuditScreen.audit_id == audit_id,
+                AuditScreen.tenant_id == principal.tenant_id,
+            )
+        )
+    }
+
+    for item in payload.screens:
+        if item.screen_id not in existing_screens:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "invalid_screen_id", "message": f"Screen {item.screen_id} not found in this audit"},
+            )
+
+    for idx, item in enumerate(payload.screens):
+        existing_screens[item.screen_id].sequence_index = -(idx + 1)
+    db.flush()
+
+    for item in payload.screens:
+        existing_screens[item.screen_id].sequence_index = item.sequence_index
+    db.commit()
+
+    updated = list(
+        db.scalars(
+            select(AuditScreen)
+            .where(AuditScreen.audit_id == audit_id, AuditScreen.tenant_id == principal.tenant_id)
+            .order_by(AuditScreen.sequence_index.asc())
+        )
+    )
+    results = []
+    for s in updated:
+        asset = db.get(ScreenAsset, s.screen_asset_id)
+        download_url = None
+        if asset:
+            try:
+                download_url = storage.presign_download(asset.object_key, asset.original_filename)
+            except Exception:
+                pass
+        results.append(
+            AuditScreenRead(
+                id=s.id,
+                audit_id=s.audit_id,
+                screen_asset_id=s.screen_asset_id,
+                sequence_index=s.sequence_index,
+                screen_label=s.screen_label,
+                screen_description=s.screen_description,
+                width_px=asset.width_px if asset else None,
+                height_px=asset.height_px if asset else None,
+                download_url=download_url,
+                created_at=s.created_at,
+            )
+        )
+    return results
+
+
+@router.patch("/projects/{project_id}/audits/{audit_id}/context", response_model=AuditRead)
+def update_audit_context(
+    project_id: UUID,
+    audit_id: UUID,
+    payload: AuditContextUpdate,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> AuditRead:
+    _project_or_404(db, project_id, principal)
+    audit = db.scalar(
+        select(Audit).where(
+            Audit.id == audit_id,
+            Audit.project_id == project_id,
+            Audit.tenant_id == principal.tenant_id,
+            Audit.deleted_at.is_(None),
+        )
+    )
+    if audit is None:
+        raise HTTPException(status_code=404, detail={"code": "audit_not_found", "message": "Audit not found"})
+
+    audit.context_json = json.dumps(payload.context)
+    audit.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(audit)
+    return AuditRead.model_validate(audit)
+
+
+@router.post("/projects/{project_id}/audits/{audit_id}/analyze-flow", response_model=MultiScreenAnalysisResponse)
+def analyze_audit_flow(
+    project_id: UUID,
+    audit_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+    storage: S3Storage = Depends(get_storage),
+    vision: MultiScreenAIVisionService = Depends(get_multi_screen_vision_service),
+) -> MultiScreenAnalysisResponse:
+    _project_or_404(db, project_id, principal)
+    audit = db.scalar(
+        select(Audit).where(
+            Audit.id == audit_id,
+            Audit.project_id == project_id,
+            Audit.tenant_id == principal.tenant_id,
+            Audit.deleted_at.is_(None),
+        )
+    )
+    if audit is None:
+        raise HTTPException(status_code=404, detail={"code": "audit_not_found", "message": "Audit not found"})
+
+    if audit.mode != "multi":
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "unsupported_audit_mode", "message": "This endpoint only supports multi-screen audits"},
+        )
+
+    screens = list(
+        db.scalars(
+            select(AuditScreen)
+            .where(AuditScreen.audit_id == audit.id, AuditScreen.tenant_id == principal.tenant_id)
+            .order_by(AuditScreen.sequence_index.asc())
+        )
+    )
+    if len(screens) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "insufficient_screens", "message": "Multi-screen flow analysis requires at least 2 uploaded screenshots"},
+        )
+
+    screen_inputs: list[tuple[bytes, str, ScreenContext]] = []
+    first_asset_id: UUID | None = None
+    for s in screens:
+        asset = db.get(ScreenAsset, s.screen_asset_id)
+        if asset is None or asset.deleted_at is not None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "asset_not_found", "message": f"Screen asset {s.screen_asset_id} not found"},
+            )
+        if first_asset_id is None:
+            first_asset_id = asset.id
+        try:
+            image_bytes = storage.get_object(asset.object_key)
+        except Exception as error:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "storage_unavailable", "message": f"Failed to retrieve screenshot {asset.original_filename} from storage"},
+            ) from error
+
+        width = asset.width_px or 1280
+        height = asset.height_px or 800
+        if not asset.width_px or not asset.height_px:
+            try:
+                img_meta = validate_and_process_image(image_bytes, asset.declared_content_type)
+                width = img_meta.width
+                height = img_meta.height
+                asset.width_px = width
+                asset.height_px = height
+                db.commit()
+            except Exception:
+                pass
+
+        s_ctx = ScreenContext(
+            screen_id=str(s.id),
+            screen_label=s.screen_label or f"Screen {s.sequence_index + 1}",
+            sequence_index=s.sequence_index,
+            width_px=width,
+            height_px=height,
+            description=s.screen_description,
+        )
+        screen_inputs.append((image_bytes, asset.declared_content_type, s_ctx))
+
+    job = AnalysisJob(
+        tenant_id=principal.tenant_id,
+        audit_id=audit.id,
+        screen_asset_id=None,
+        status="processing",
+        provider="forteux-vision-engine",
+        model="deterministic-multi-flow-v1",
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    db.query(Finding).where(Finding.audit_id == audit.id).delete()
+
+    try:
+        context_dict = json.loads(audit.context_json or "{}") if audit.context_json else {}
+        analysis_result = vision.analyze_flow(
+            screens=screen_inputs,
+            journey_context=context_dict,
+        )
+
+        retrieval = KnowledgeRetrieval()
+        retrieved_knowledge = retrieval.retrieve(
+            query=f"{audit.name} user flow progression navigation components consistency",
+            tenant_id=principal.tenant_id,
+            project_id=project_id,
+            include_global=True,
+            include_project=True,
+            top_k=4,
+            db=db,
+        )
+
+        persisted_findings: list[Finding] = []
+        all_generated = analysis_result.screen_level_findings + analysis_result.cross_screen_findings
+        for f in all_generated:
+            boxes_json = json.dumps([b.model_dump() for b in f.bounding_boxes])
+            affected_json = json.dumps(f.affected_screen_ids)
+            db_finding = Finding(
+                tenant_id=principal.tenant_id,
+                audit_id=audit.id,
+                screen_asset_id=first_asset_id if f.scope == "screen_level" else None,
+                analysis_job_id=job.id,
+                scope=f.scope,
+                affected_screen_ids_json=affected_json,
+                category=f.category,
+                title=f.title,
+                description=f.description,
+                why_it_matters=f.why_it_matters,
+                recommended_fix=f.recommended_fix,
+                design_principle=f.design_principle,
+                severity=f.severity,
+                confidence=f.confidence,
+                evidence_type=f.evidence_type,
+                evidence=f.evidence,
+                bounding_boxes_json=boxes_json,
+                limitations=f.limitations,
+            )
+            db.add(db_finding)
+            persisted_findings.append(db_finding)
+
+        db.flush()
+
+        if retrieved_knowledge:
+            for pf in persisted_findings:
+                for rank, chunk in enumerate(retrieved_knowledge[:2], start=1):
+                    evidence = FindingEvidence(
+                        id=uuid4(),
+                        tenant_id=principal.tenant_id,
+                        finding_id=pf.id,
+                        chunk_id=chunk.chunk_id,
+                        document_id=chunk.document_id,
+                        document_display_name=chunk.document_name,
+                        quote_or_paraphrase=chunk.text[:250],
+                        page_number_snapshot=chunk.page_start,
+                        section_heading_snapshot=chunk.section_heading,
+                        retrieval_score=chunk.score,
+                        retrieval_rank=rank,
+                        created_at=datetime.now(timezone.utc),
+                    )
+                    db.add(evidence)
+
+        flow_report_data = analysis_result.journey_report.model_dump()
+        job.status = "completed"
+        job.summary = analysis_result.journey_report.journey_summary
+        job.flow_report_json = json.dumps(flow_report_data)
+        job.provider = analysis_result.provider
+        job.model = analysis_result.model
+        job.completed_at = datetime.now(timezone.utc)
+        audit.status = "completed"
+        db.commit()
+        db.refresh(job)
+
+        screen_level = [f for f in persisted_findings if f.scope == "screen_level"]
+        cross_screen = [f for f in persisted_findings if f.scope == "cross_screen"]
+
+        return MultiScreenAnalysisResponse(
+            job=AnalysisJobRead.model_validate(job),
+            journey_report=JourneyReportRead(**flow_report_data),
+            screen_level_findings=_populate_multi_screen_finding_reads(screen_level, db),
+            cross_screen_findings=_populate_multi_screen_finding_reads(cross_screen, db),
+        )
+    except Exception as error:
+        db.rollback()
+        job.status = "failed"
+        job.error_message = str(error)
+        job.completed_at = datetime.now(timezone.utc)
+        audit.status = "failed"
+        db.commit()
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "analysis_failed", "message": f"Multi-screen flow analysis failed: {error}"},
+        )
+
+
+@router.get("/projects/{project_id}/audits/{audit_id}/flow-report", response_model=FlowReportRead)
+def get_audit_flow_report(
+    project_id: UUID,
+    audit_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> FlowReportRead:
+    _project_or_404(db, project_id, principal)
+    audit = db.scalar(
+        select(Audit).where(
+            Audit.id == audit_id,
+            Audit.project_id == project_id,
+            Audit.tenant_id == principal.tenant_id,
+            Audit.deleted_at.is_(None),
+        )
+    )
+    if audit is None:
+        raise HTTPException(status_code=404, detail={"code": "audit_not_found", "message": "Audit not found"})
+
+    if audit.mode != "multi":
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "unsupported_audit_mode", "message": "This endpoint only supports multi-screen audits"},
+        )
+
+    job = db.scalar(
+        select(AnalysisJob)
+        .where(
+            AnalysisJob.audit_id == audit_id,
+            AnalysisJob.tenant_id == principal.tenant_id,
+            AnalysisJob.status == "completed",
+        )
+        .order_by(AnalysisJob.created_at.desc())
+    )
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "no_flow_report", "message": "No completed flow analysis found for this audit"},
+        )
+
+    findings = list(
+        db.scalars(
+            select(Finding)
+            .where(Finding.audit_id == audit_id, Finding.tenant_id == principal.tenant_id)
+            .order_by(Finding.created_at.asc())
+        )
+    )
+
+    journey_report = None
+    if job.flow_report_json:
+        try:
+            journey_report = JourneyReportRead(**json.loads(job.flow_report_json))
+        except Exception:
+            pass
+
+    screen_level = [f for f in findings if f.scope == "screen_level"]
+    cross_screen = [f for f in findings if f.scope == "cross_screen"]
+
+    return FlowReportRead(
+        job_id=job.id,
+        status=job.status,
+        journey_report=journey_report,
+        screen_level_findings=_populate_multi_screen_finding_reads(screen_level, db),
+        cross_screen_findings=_populate_multi_screen_finding_reads(cross_screen, db),
+        created_at=job.created_at,
+        completed_at=job.completed_at,
+    )
 
 
 # ===========================================================================

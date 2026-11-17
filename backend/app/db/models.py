@@ -177,6 +177,7 @@ class AuditScreen(Base):
     screen_asset_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     sequence_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     screen_label: Mapped[str | None] = mapped_column(String(200))
+    screen_description: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
 
@@ -204,6 +205,7 @@ class AnalysisJob(Base):
     provider: Mapped[str] = mapped_column(String(64), nullable=False)
     model: Mapped[str] = mapped_column(String(128), nullable=False)
     summary: Mapped[str | None] = mapped_column(Text)
+    flow_report_json: Mapped[str | None] = mapped_column(Text)
     error_message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -237,6 +239,10 @@ class Finding(Base):
             "confidence >= 0.0 AND confidence <= 1.0",
             name="ck_finding_confidence_range",
         ),
+        CheckConstraint(
+            "scope IN ('screen_level', 'cross_screen')",
+            name="ck_finding_scope",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -245,6 +251,8 @@ class Finding(Base):
     screen_asset_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("screen_assets.id", ondelete="SET NULL"))
     analysis_job_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
 
+    scope: Mapped[str] = mapped_column(String(16), default="screen_level", nullable=False)
+    affected_screen_ids_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     category: Mapped[str] = mapped_column(String(64), nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
