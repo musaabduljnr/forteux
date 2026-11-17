@@ -1,0 +1,82 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: OIDC user pool foundation for Forteux sign-in.
+Parameters:
+  DomainPrefix:
+    Type: String
+    Description: Globally unique Cognito hosted UI domain prefix.
+  CallbackUrls:
+    Type: CommaDelimitedList
+    Default: http://localhost:3000/api/auth/callback/cognito
+    Description: Exact Auth.js callback URLs for local and deployed web environments.
+  LogoutUrls:
+    Type: CommaDelimitedList
+    Default: http://localhost:3000
+    Description: Exact allowed post-logout URLs.
+Resources:
+  ForteuxUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: forteux-users
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      MfaConfiguration: OPTIONAL
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          RequireUppercase: true
+      Schema:
+        - Name: email
+          Required: true
+          Mutable: true
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      UserPoolTags:
+        Application: forteux
+  ForteuxUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: forteux-nextjs
+      UserPoolId: !Ref ForteuxUserPool
+      GenerateSecret: true
+      PreventUserExistenceErrors: ENABLED
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - profile
+      SupportedIdentityProviders:
+        - COGNITO
+      CallbackURLs: !Ref CallbackUrls
+      LogoutURLs: !Ref LogoutUrls
+      ExplicitAuthFlows:
+        - ALLOW_REFRESH_TOKEN_AUTH
+      RefreshTokenValidity: 1
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      TokenValidityUnits:
+        RefreshToken: days
+        AccessToken: minutes
+        IdToken: minutes
+  ForteuxUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Ref DomainPrefix
+      UserPoolId: !Ref ForteuxUserPool
+Outputs:
+  UserPoolId:
+    Value: !Ref ForteuxUserPool
+  UserPoolIssuer:
+    Value: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${ForteuxUserPool}"
+  ClientId:
+    Value: !Ref ForteuxUserPoolClient
+  HostedUiDomain:
+    Value: !Sub "https://${DomainPrefix}.auth.${AWS::Region}.amazoncognito.com"

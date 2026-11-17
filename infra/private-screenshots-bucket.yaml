@@ -1,0 +1,65 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Private S3 bucket foundation for Forteux screenshot assets.
+Parameters:
+  BucketName:
+    Type: String
+    Description: Globally unique bucket name for this environment.
+  WebOrigin:
+    Type: String
+    Description: Exact HTTPS origin of the deployed Next.js application.
+Resources:
+  ScreenshotBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins:
+              - !Ref WebOrigin
+            AllowedMethods:
+              - PUT
+            AllowedHeaders:
+              - Content-Type
+            ExposedHeaders:
+              - ETag
+            MaxAge: 300
+      LifecycleConfiguration:
+        Rules:
+          - Id: AbortIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+  ScreenshotBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ScreenshotBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt ScreenshotBucket.Arn
+              - !Sub "${ScreenshotBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+Outputs:
+  BucketName:
+    Value: !Ref ScreenshotBucket
+  BucketArn:
+    Value: !GetAtt ScreenshotBucket.Arn
