@@ -429,3 +429,169 @@ class StitchPromptGenerator:
 
         return "\n\n".join(sections)
 
+    def generate_design_system_refinement_prompt(
+        self,
+        audit_name: str,
+        screen_count: int,
+        consistency_score: float | None,
+        colors: list[dict[str, Any]],
+        typography: list[dict[str, Any]],
+        spacing_layout: dict[str, Any],
+        shapes_surfaces: dict[str, Any],
+        components: list[dict[str, Any]],
+        tokens: list[dict[str, Any]],
+        consistency_issues: list[dict[str, Any]],
+        recommendations: list[str],
+        user_instructions: str | None = None,
+        retrieved_knowledge: list["RetrievedChunk"] | None = None,
+    ) -> str:
+        """
+        Generate a comprehensive Google Stitch Design System Refinement Prompt.
+        Standardizes typography, spacing, colors, and reusable components across screens
+        while strictly preserving product identity and information architecture.
+        """
+        score_display = f"{consistency_score}/100" if consistency_score is not None else "Pending"
+        sections: list[str] = []
+
+        # 1. Executive Directive
+        sections.append(
+            f"# Google Stitch Design System Refinement Brief: {audit_name}\n\n"
+            f"**Audit Context**: Design system extraction & cross-screen harmonization across {screen_count} screens.\n"
+            f"**Current Consistency Score**: {score_display}\n\n"
+            f"You are a Principal Product Designer refining and standardizing the UI design system of this application. "
+            f"Your objective is to establish a rigorous, uniform visual language across all screens while strictly "
+            f"preserving the brand identity, product layout, and user mental model."
+        )
+
+        # 2. Design System Core Principles
+        sections.append(
+            "## 1. Core Directives for Google Stitch\n"
+            "- **Preserve Product Identity**: Do not re-brand or introduce arbitrary aesthetic pivots. Elevate and align the existing visual language.\n"
+            "- **Standardize Reusable Components**: Apply identical button heights, text input styles, card borders, and tab bars across all screens.\n"
+            "- **Strict Token Uniformity**: Replace rogue, one-off colors and font sizes with the exact design tokens specified below.\n"
+            "- **Maintain Information Architecture**: Do not rearrange page layouts, user navigation, or core content hierarchy.\n"
+            "- **Evidence-Based Fidelity**: Verified tokens must be strictly implemented; approximate tokens provide baseline targets."
+        )
+
+        # 3. Color Tokens & Foundations
+        color_lines = []
+        for c in colors[:10]:
+            name = c.get("semantic_name", c.get("category", "Color"))
+            hex_val = c.get("hex", "#000000")
+            cat = c.get("category", "general")
+            ev = c.get("evidence", "observed")
+            conf = int(c.get("confidence", 0.9) * 100)
+            color_lines.append(f"- **{name}** (`{hex_val}`) — *{cat.capitalize()}* [{ev}, {conf}% conf]")
+        if color_lines:
+            sections.append(
+                "## 2. Color Palette & Token System\n"
+                "Unify all UI elements to the following measured color tokens:\n"
+                + "\n".join(color_lines)
+            )
+
+        # 4. Typography Scale
+        type_lines = []
+        for t in typography[:8]:
+            style = t.get("style_name", "typography.style")
+            size = t.get("font_size_approx", "14px")
+            weight = t.get("font_weight_category", "regular")
+            hier = t.get("text_hierarchy", "body")
+            type_lines.append(f"- **{style}**: `{size}`, weight: `{weight}` (hierarchy: *{hier}*)")
+        if type_lines:
+            sections.append(
+                "## 3. Typography Hierarchy\n"
+                "Standardize all headings, body text, and labels across all screens to this scale:\n"
+                + "\n".join(type_lines)
+            )
+
+        # 5. Spacing, Shapes & Surfaces
+        surface_items = []
+        radii = shapes_surfaces.get("border_radii", [])
+        if radii:
+            surface_items.append(f"- **Border Radii**: Standardize to {', '.join(radii)} across cards, buttons, and inputs.")
+        if shapes_surfaces.get("borders"):
+            surface_items.append(f"- **Borders & Dividers**: {shapes_surfaces['borders']}")
+        if spacing_layout.get("card_padding"):
+            surface_items.append(f"- **Card Padding**: {spacing_layout['card_padding']}")
+        if spacing_layout.get("component_gaps"):
+            surface_items.append(f"- **Component Gaps**: {spacing_layout['component_gaps']}")
+        if surface_items:
+            sections.append(
+                "## 4. Spacing, Shapes & Surface Treatments\n"
+                + "\n".join(surface_items)
+            )
+
+        # 6. Reusable Component Specifications
+        comp_lines = []
+        for comp in components[:8]:
+            cat = comp.get("component_category", "Component")
+            spec = comp.get("recommended_component_spec", comp.get("visual_description", ""))
+            vars_list = comp.get("variations", [])
+            var_note = f" (Resolve variations: {'; '.join(vars_list)})" if vars_list else ""
+            comp_lines.append(f"- **{cat}**: {spec}{var_note}")
+        if comp_lines:
+            sections.append(
+                "## 5. Reusable Component Standards\n"
+                "Consolidate all button, input, and card instances into these canonical component patterns:\n"
+                + "\n".join(comp_lines)
+            )
+
+        # 7. Cross-Screen Visual Inconsistencies to Resolve
+        if consistency_issues:
+            issue_lines = []
+            for idx, issue in enumerate(consistency_issues[:10], start=1):
+                sev = issue.get("severity", "medium").upper()
+                title = issue.get("title", "")
+                desc = issue.get("description", "")
+                fix = issue.get("recommended_fix", "")
+                screens = issue.get("affected_screens", [])
+                scr_str = f" [Screens: {', '.join(str(s) for s in screens)}]" if screens else ""
+                issue_lines.append(f"{idx}. **[{sev}] {title}**{scr_str}\n   - *Problem*: {desc}\n   - *Required Fix*: {fix}")
+            sections.append(
+                "## 6. Targeted Cross-Screen Inconsistencies to Resolve\n"
+                "Specifically correct the following visual drift between screens:\n\n"
+                + "\n\n".join(issue_lines)
+            )
+
+        # 8. User Custom Instructions
+        if user_instructions and user_instructions.strip():
+            sections.append(
+                "## 7. Additional User Design Directives\n"
+                f"{user_instructions.strip()}"
+            )
+
+        # 9. Knowledge Library Reference Citations (if present)
+        if retrieved_knowledge:
+            ref_items = []
+            for chunk in retrieved_knowledge[:4]:
+                heading_info = f" ({chunk.section_heading})" if chunk.section_heading else ""
+                clean_text = chunk.text.replace("\n", " ").strip()
+                if len(clean_text) > 180:
+                    clean_text = clean_text[:177] + "..."
+                ref_items.append(f"- **{chunk.document_name}**{heading_info}: \"{clean_text}\"")
+            sections.append(
+                "## 8. Applied Brand & Design Standards (Knowledge Base)\n"
+                + "\n".join(ref_items)
+            )
+
+        # 10. Recommended Action Plan
+        if recommendations:
+            rec_items = [f"{i}. {r}" for i, r in enumerate(recommendations[:6], start=1)]
+            sections.append(
+                "## 9. Design System Harmonization Action Plan\n"
+                + "\n".join(rec_items)
+            )
+
+        # 11. Handoff Instructions for Google Stitch
+        sections.append(
+            f"## 10. Google Stitch Handoff & Generation Protocol\n"
+            f"> **Handoff Procedure**:\n"
+            f"> 1. Upload all {screen_count} original screenshots to Google Stitch in sequence.\n"
+            f"> 2. Paste this complete Design System Refinement Brief into the Stitch generation window.\n"
+            f"> 3. Instruct Stitch to generate the redesigned screens as a unified, token-harmonized set.\n"
+            f"> 4. Verify that primary buttons, typography hierarchy, card radiuses, and spacing are 100% consistent across all outputs."
+        )
+
+        return "\n\n".join(sections)
+
+

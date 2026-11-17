@@ -455,3 +455,64 @@ class DeletionTask(Base):
     error_message: Mapped[str | None] = mapped_column(Text)
     requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DesignSystemAnalysis(Base):
+    __tablename__ = "design_system_analyses"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["tenants.id"],
+            ondelete="RESTRICT",
+            name="fk_design_system_tenant",
+        ),
+        ForeignKeyConstraint(
+            ["project_id"],
+            ["projects.id"],
+            ondelete="RESTRICT",
+            name="fk_design_system_project",
+        ),
+        ForeignKeyConstraint(
+            ["audit_id"],
+            ["audits.id"],
+            ondelete="CASCADE",
+            name="fk_design_system_audit",
+        ),
+        Index("ix_design_system_tenant_project_audit", "tenant_id", "project_id", "audit_id"),
+        Index("ix_design_system_audit_created", "audit_id", "created_at"),
+        CheckConstraint(
+            "status IN ('pending', 'analyzing', 'completed', 'failed')",
+            name="ck_design_system_status",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    audit_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+
+    consistency_score: Mapped[float | None] = mapped_column(Float)
+    score_breakdown_json: Mapped[str | None] = mapped_column(Text)
+    extraction_coverage: Mapped[float | None] = mapped_column(Float)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    summary: Mapped[str | None] = mapped_column(Text)
+
+    color_palette_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    typography_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    spacing_layout_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    shapes_surfaces_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    components_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    tokens_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    consistency_issues_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    recommendations_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    limitations_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    stitch_prompt: Mapped[str | None] = mapped_column(Text)
+
+    provider: Mapped[str] = mapped_column(String(64), default="forteux-design-system-engine", nullable=False)
+    model: Mapped[str] = mapped_column(String(128), default="gemini-2.0-flash", nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

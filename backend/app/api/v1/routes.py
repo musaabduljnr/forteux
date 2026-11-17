@@ -23,9 +23,18 @@ from app.api.v1.schemas import (
     AuditScreenReorderRequest,
     AuditScreenUpdate,
     BoundingBoxRead,
+    ComponentPattern,
+    DesignConsistencyIssue,
+    DesignSystemExportCss,
+    DesignSystemExportJson,
+    DesignSystemPromptRequest,
+    DesignSystemPromptResponse,
+    DesignSystemReportRead,
     DevTokenRequest,
     DevTokenResponse,
     DocumentVersionRead,
+    ExtractedColor,
+    ExtractedTypography,
     FindingEvidenceRead,
     FindingRead,
     FlowReportRead,
@@ -47,6 +56,9 @@ from app.api.v1.schemas import (
     PromptRead,
     PromptUpdateRequest,
     PromptVersionRead,
+    ProposedDesignToken,
+    ShapeSurfacePattern,
+    SpacingLayoutPattern,
     UploadIntentRead,
     UploadRequest,
 )
@@ -58,6 +70,7 @@ from app.db.models import (
     AuditPrompt,
     AuditScreen,
     DeletionTask,
+    DesignSystemAnalysis,
     DocumentVersion,
     Finding,
     FindingEvidence,
@@ -70,6 +83,12 @@ from app.db.models import (
 )
 from app.db.session import get_db
 from app.services.ai_vision import AIVisionService, get_vision_service
+from app.services.design_system import (
+    DesignSystemExtractionService,
+    export_design_system_json,
+    export_tokens_to_css,
+    get_design_system_service,
+)
 from app.services.document_extractor import SUPPORTED_MIME_TYPES
 from app.services.image import ImageValidationError, validate_and_process_image
 from app.services.knowledge_pipeline import KnowledgePipeline
@@ -2489,4 +2508,465 @@ def search_project_knowledge(
         )
         for c in chunks
     ]
+
+
+# ============================================================================
+# Phase 08: Design System Extraction & Cross-Screen Consistency Endpoints
+# ============================================================================
+
+def _populate_design_system_read(
+    ds: DesignSystemAnalysis,
+    screen_count: int = 0,
+) -> DesignSystemReportRead:
+    def _parse_json(val: str | None, default: Any) -> Any:
+        if not val:
+            return default
+        try:
+            return json.loads(val)
+        except Exception:
+            return default
+
+    score_breakdown = _parse_json(ds.score_breakdown_json, {})
+    raw_colors = _parse_json(ds.color_palette_json, [])
+    raw_type = _parse_json(ds.typography_json, [])
+    raw_spacing = _parse_json(ds.spacing_layout_json, {})
+    raw_shapes = _parse_json(ds.shapes_surfaces_json, {})
+    raw_components = _parse_json(ds.components_json, [])
+    raw_tokens = _parse_json(ds.tokens_json, [])
+    raw_issues = _parse_json(ds.consistency_issues_json, [])
+    recommendations = _parse_json(ds.recommendations_json, [])
+    limitations = _parse_json(ds.limitations_json, [])
+
+    colors = [ExtractedColor(**c) for c in raw_colors]
+    typography = [ExtractedTypography(**t) for t in raw_type]
+    spacing_layout = SpacingLayoutPattern(**raw_spacing)
+    shapes_surfaces = ShapeSurfacePattern(**raw_shapes)
+    components = [ComponentPattern(**comp) for comp in raw_components]
+    tokens = [ProposedDesignToken(**tok) for tok in raw_tokens]
+    issues = [DesignConsistencyIssue(**iss) for iss in raw_issues]
+
+    return DesignSystemReportRead(
+        id=ds.id,
+        project_id=ds.project_id,
+        audit_id=ds.audit_id,
+        status=ds.status,
+        consistency_score=ds.consistency_score,
+        score_breakdown=score_breakdown,
+        extraction_coverage=ds.extraction_coverage,
+        confidence=ds.confidence,
+        summary=ds.summary,
+        screens_analyzed=screen_count,
+        color_palette=colors,
+        typography=typography,
+        spacing_layout=spacing_layout,
+        shapes_surfaces=shapes_surfaces,
+        components=components,
+        tokens=tokens,
+        consistency_issues=issues,
+        recommendations=recommendations,
+        limitations=limitations,
+        stitch_prompt=ds.stitch_prompt,
+        provider=ds.provider,
+        model=ds.model,
+        error_message=ds.error_message,
+        created_at=ds.created_at,
+        completed_at=ds.completed_at,
+    )
+
+
+@router.post(
+    "/projects/{project_id}/audits/{audit_id}/design-system/extract",
+    response_model=DesignSystemReportRead,
+    status_code=status.HTTP_200_OK,
+)
+def extract_audit_design_system(
+    project_id: UUID,
+    audit_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+    storage: S3Storage = Depends(get_storage),
+    service: DesignSystemExtractionService = Depends(get_design_system_service),
+) -> DesignSystemReportRead:
+    _project_or_404(db, project_id, principal)
+    audit = db.scalar(
+        select(Audit).where(
+            Audit.id == audit_id,
+            Audit.project_id == project_id,
+            Audit.tenant_id == principal.tenant_id,
+            Audit.deleted_at.is_(None),
+        )
+    )
+    if audit is None:
+        raise HTTPException(status_code=404, detail={"code": "audit_not_found", "message": "Audit not found"})
+
+    screens = list(
+        db.scalars(
+            select(AuditScreen)
+            .where(AuditScreen.audit_id == audit.id, AuditScreen.tenant_id == principal.tenant_id)
+            .order_by(AuditScreen.sequence_index.asc())
+        )
+    )
+    if not screens:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "no_screens_found", "message": "Design system extraction requires at least 1 uploaded screenshot in the audit"},
+        )
+
+    # Load screen bytes
+    screen_inputs: list[tuple[bytes, str, ScreenContext]] = []
+    for s in screens:
+        asset = db.get(ScreenAsset, s.screen_asset_id)
+        if asset is None or asset.deleted_at is not None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "asset_not_found", "message": f"Screen asset {s.screen_asset_id} not found"},
+            )
+        try:
+            image_bytes = storage.get_object(asset.object_key)
+        except Exception as error:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "storage_unavailable", "message": f"Failed to retrieve screenshot {asset.original_filename} from storage"},
+            ) from error
+
+        width = asset.width_px or 1280
+        height = asset.height_px or 800
+        s_ctx = ScreenContext(
+            screen_id=str(s.id),
+            screen_label=s.screen_label or f"Screen {s.sequence_index + 1}",
+            sequence_index=s.sequence_index,
+            width_px=width,
+            height_px=height,
+            description=s.screen_description,
+        )
+        screen_inputs.append((image_bytes, asset.declared_content_type, s_ctx))
+
+    # Retrieve optional design guidelines context from Knowledge Library
+    rag_context = None
+    try:
+        retrieval = KnowledgeRetrieval()
+        doc_chunks = retrieval.retrieve(
+            query="design system brand typography colors spacing components buttons tokens",
+            tenant_id=principal.tenant_id,
+            project_id=project_id,
+            top_k=3,
+            db=db,
+        )
+        if doc_chunks:
+            rag_context = "\n\n".join([f"[{c.document_name}]: {c.text}" for c in doc_chunks])
+    except Exception:
+        pass
+
+    # Extract design system
+    raw_result, score, breakdown, coverage = service.extract_design_system(
+        screens=screen_inputs,
+        audit_name=audit.name,
+        rag_context=rag_context,
+    )
+
+    # Generate Google Stitch design system refinement brief
+    generator = StitchPromptGenerator()
+    stitch_prompt = generator.generate_design_system_refinement_prompt(
+        audit_name=audit.name,
+        screen_count=len(screens),
+        consistency_score=score,
+        colors=[c.model_dump() for c in raw_result.colors],
+        typography=[t.model_dump() for t in raw_result.typography],
+        spacing_layout=raw_result.spacing_layout.model_dump(),
+        shapes_surfaces=raw_result.shapes_surfaces.model_dump(),
+        components=[comp.model_dump() for comp in raw_result.components],
+        tokens=[tok.model_dump() for tok in raw_result.tokens],
+        consistency_issues=[iss.model_dump() for iss in raw_result.consistency_issues],
+        recommendations=raw_result.recommendations,
+    )
+
+    # Upsert DesignSystemAnalysis
+    existing = db.scalar(
+        select(DesignSystemAnalysis).where(
+            DesignSystemAnalysis.audit_id == audit.id,
+            DesignSystemAnalysis.tenant_id == principal.tenant_id,
+        )
+    )
+    now = datetime.now(timezone.utc)
+    if existing is not None:
+        existing.status = "completed"
+        existing.consistency_score = score
+        existing.score_breakdown_json = json.dumps(breakdown)
+        existing.extraction_coverage = coverage
+        existing.confidence = raw_result.confidence
+        existing.summary = raw_result.summary
+        existing.color_palette_json = json.dumps([c.model_dump() for c in raw_result.colors])
+        existing.typography_json = json.dumps([t.model_dump() for t in raw_result.typography])
+        existing.spacing_layout_json = json.dumps(raw_result.spacing_layout.model_dump())
+        existing.shapes_surfaces_json = json.dumps(raw_result.shapes_surfaces.model_dump())
+        existing.components_json = json.dumps([comp.model_dump() for comp in raw_result.components])
+        existing.tokens_json = json.dumps([tok.model_dump() for tok in raw_result.tokens])
+        existing.consistency_issues_json = json.dumps([iss.model_dump() for iss in raw_result.consistency_issues])
+        existing.recommendations_json = json.dumps(raw_result.recommendations)
+        existing.limitations_json = json.dumps(raw_result.limitations)
+        existing.stitch_prompt = stitch_prompt
+        existing.provider = raw_result.provider
+        existing.model = raw_result.model
+        existing.updated_at = now
+        existing.completed_at = now
+        ds = existing
+    else:
+        ds = DesignSystemAnalysis(
+            tenant_id=principal.tenant_id,
+            project_id=project_id,
+            audit_id=audit.id,
+            status="completed",
+            consistency_score=score,
+            score_breakdown_json=json.dumps(breakdown),
+            extraction_coverage=coverage,
+            confidence=raw_result.confidence,
+            summary=raw_result.summary,
+            color_palette_json=json.dumps([c.model_dump() for c in raw_result.colors]),
+            typography_json=json.dumps([t.model_dump() for t in raw_result.typography]),
+            spacing_layout_json=json.dumps(raw_result.spacing_layout.model_dump()),
+            shapes_surfaces_json=json.dumps(raw_result.shapes_surfaces.model_dump()),
+            components_json=json.dumps([comp.model_dump() for comp in raw_result.components]),
+            tokens_json=json.dumps([tok.model_dump() for tok in raw_result.tokens]),
+            consistency_issues_json=json.dumps([iss.model_dump() for iss in raw_result.consistency_issues]),
+            recommendations_json=json.dumps(raw_result.recommendations),
+            limitations_json=json.dumps(raw_result.limitations),
+            stitch_prompt=stitch_prompt,
+            provider=raw_result.provider,
+            model=raw_result.model,
+            created_at=now,
+            updated_at=now,
+            completed_at=now,
+        )
+        db.add(ds)
+
+    db.commit()
+    db.refresh(ds)
+    return _populate_design_system_read(ds, screen_count=len(screens))
+
+
+@router.get(
+    "/projects/{project_id}/audits/{audit_id}/design-system",
+    response_model=DesignSystemReportRead,
+)
+def read_audit_design_system(
+    project_id: UUID,
+    audit_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> DesignSystemReportRead:
+    _project_or_404(db, project_id, principal)
+    audit = db.scalar(
+        select(Audit).where(
+            Audit.id == audit_id,
+            Audit.project_id == project_id,
+            Audit.tenant_id == principal.tenant_id,
+            Audit.deleted_at.is_(None),
+        )
+    )
+    if audit is None:
+        raise HTTPException(status_code=404, detail={"code": "audit_not_found", "message": "Audit not found"})
+
+    ds = db.scalar(
+        select(DesignSystemAnalysis).where(
+            DesignSystemAnalysis.audit_id == audit.id,
+            DesignSystemAnalysis.tenant_id == principal.tenant_id,
+        )
+    )
+    if ds is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "design_system_not_found", "message": "No design system analysis found for this audit. Run extraction first."},
+        )
+
+    screen_count = len(
+        list(
+            db.scalars(
+                select(AuditScreen).where(
+                    AuditScreen.audit_id == audit.id,
+                    AuditScreen.tenant_id == principal.tenant_id,
+                )
+            )
+        )
+    )
+    return _populate_design_system_read(ds, screen_count=screen_count)
+
+
+@router.get(
+    "/projects/{project_id}/audits/{audit_id}/design-system/export/json",
+    response_model=DesignSystemExportJson,
+)
+def export_design_system_json_endpoint(
+    project_id: UUID,
+    audit_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> DesignSystemExportJson:
+    _project_or_404(db, project_id, principal)
+    ds = db.scalar(
+        select(DesignSystemAnalysis).where(
+            DesignSystemAnalysis.audit_id == audit_id,
+            DesignSystemAnalysis.project_id == project_id,
+            DesignSystemAnalysis.tenant_id == principal.tenant_id,
+        )
+    )
+    if ds is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "design_system_not_found", "message": "Design system analysis not found for export"},
+        )
+
+    read_rep = _populate_design_system_read(ds)
+    exported = export_design_system_json(
+        analysis_id=str(ds.id),
+        audit_id=str(audit_id),
+        project_id=str(project_id),
+        consistency_score=ds.consistency_score,
+        tokens=read_rep.tokens,
+        colors=read_rep.color_palette,
+        typography=read_rep.typography,
+        components=read_rep.components,
+    )
+    return DesignSystemExportJson(
+        design_system_id=exported["design_system_id"],
+        audit_id=exported["audit_id"],
+        project_id=exported["project_id"],
+        consistency_score=exported["consistency_score"],
+        generated_at=datetime.now(timezone.utc).isoformat(),
+        tokens=exported["tokens"],
+        colors=read_rep.color_palette,
+        typography=read_rep.typography,
+        components=read_rep.components,
+    )
+
+
+@router.get(
+    "/projects/{project_id}/audits/{audit_id}/design-system/export/css",
+    response_model=DesignSystemExportCss,
+)
+def export_design_system_css_endpoint(
+    project_id: UUID,
+    audit_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> DesignSystemExportCss:
+    _project_or_404(db, project_id, principal)
+    ds = db.scalar(
+        select(DesignSystemAnalysis).where(
+            DesignSystemAnalysis.audit_id == audit_id,
+            DesignSystemAnalysis.project_id == project_id,
+            DesignSystemAnalysis.tenant_id == principal.tenant_id,
+        )
+    )
+    if ds is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "design_system_not_found", "message": "Design system analysis not found for export"},
+        )
+
+    read_rep = _populate_design_system_read(ds)
+    css_content = export_tokens_to_css(read_rep.tokens)
+    return DesignSystemExportCss(
+        css_content=css_content,
+        token_count=len(read_rep.tokens),
+    )
+
+
+@router.post(
+    "/projects/{project_id}/audits/{audit_id}/design-system/stitch-prompt",
+    response_model=DesignSystemPromptResponse,
+)
+def generate_design_system_stitch_prompt_endpoint(
+    project_id: UUID,
+    audit_id: UUID,
+    body: DesignSystemPromptRequest,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> DesignSystemPromptResponse:
+    _project_or_404(db, project_id, principal)
+    audit = db.scalar(
+        select(Audit).where(
+            Audit.id == audit_id,
+            Audit.project_id == project_id,
+            Audit.tenant_id == principal.tenant_id,
+            Audit.deleted_at.is_(None),
+        )
+    )
+    if audit is None:
+        raise HTTPException(status_code=404, detail={"code": "audit_not_found", "message": "Audit not found"})
+
+    ds = db.scalar(
+        select(DesignSystemAnalysis).where(
+            DesignSystemAnalysis.audit_id == audit.id,
+            DesignSystemAnalysis.tenant_id == principal.tenant_id,
+        )
+    )
+    if ds is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "design_system_not_found", "message": "Run design system extraction before generating a Stitch prompt"},
+        )
+
+    screens = list(
+        db.scalars(
+            select(AuditScreen).where(
+                AuditScreen.audit_id == audit.id,
+                AuditScreen.tenant_id == principal.tenant_id,
+            )
+        )
+    )
+
+    read_rep = _populate_design_system_read(ds, screen_count=len(screens))
+    generator = StitchPromptGenerator()
+
+    # Regenerate prompt with optional user instructions
+    new_prompt = generator.generate_design_system_refinement_prompt(
+        audit_name=audit.name,
+        screen_count=len(screens),
+        consistency_score=ds.consistency_score,
+        colors=[c.model_dump() for c in read_rep.color_palette],
+        typography=[t.model_dump() for t in read_rep.typography],
+        spacing_layout=read_rep.spacing_layout.model_dump(),
+        shapes_surfaces=read_rep.shapes_surfaces.model_dump(),
+        components=[comp.model_dump() for comp in read_rep.components],
+        tokens=[tok.model_dump() for tok in read_rep.tokens] if body.include_tokens else [],
+        consistency_issues=[iss.model_dump() for iss in read_rep.consistency_issues] if body.include_inconsistencies else [],
+        recommendations=read_rep.recommendations,
+        user_instructions=body.custom_instructions,
+    )
+
+    # Update in DB
+    ds.stitch_prompt = new_prompt
+    ds.updated_at = datetime.now(timezone.utc)
+    db.commit()
+
+    return DesignSystemPromptResponse(
+        prompt=new_prompt,
+        tokens_included=len(read_rep.tokens) if body.include_tokens else 0,
+        issues_addressed=len(read_rep.consistency_issues) if body.include_inconsistencies else 0,
+        screens_referenced=len(screens),
+    )
+
+
+@router.get(
+    "/projects/{project_id}/design-systems",
+    response_model=list[DesignSystemReportRead],
+)
+def list_project_design_systems(
+    project_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> list[DesignSystemReportRead]:
+    _project_or_404(db, project_id, principal)
+    analyses = list(
+        db.scalars(
+            select(DesignSystemAnalysis)
+            .where(
+                DesignSystemAnalysis.project_id == project_id,
+                DesignSystemAnalysis.tenant_id == principal.tenant_id,
+            )
+            .order_by(DesignSystemAnalysis.updated_at.desc())
+        )
+    )
+    return [_populate_design_system_read(a) for a in analyses]
+
 

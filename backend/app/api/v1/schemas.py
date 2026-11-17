@@ -417,3 +417,145 @@ class FlowReportRead(BaseModel):
     completed_at: datetime | None = None
 
 
+# Phase 08: Design System Extraction Schemas
+
+class ExtractedColor(BaseModel):
+    hex: str
+    semantic_name: str
+    category: str  # primary, secondary, accent, background, surface, text, border, status
+    screens: list[int] = Field(default_factory=list)
+    frequency: str = "recurring"  # primary, recurring, rare
+    confidence: float = 0.9
+    evidence: str = "observed"  # observed, approximate, inferred
+
+
+class ExtractedTypography(BaseModel):
+    style_name: str  # heading.large, heading.medium, body.large, label, etc.
+    font_size_approx: str  # e.g. "24px / 1.5rem"
+    font_weight_category: str  # bold, semibold, regular, medium
+    text_hierarchy: str  # display, h1, h2, h3, body, caption, button
+    alignment: str = "left"
+    line_height_estimate: str | None = None
+    screens: list[int] = Field(default_factory=list)
+    confidence: float = 0.85
+    evidence: str = "approximate"
+
+
+class SpacingLayoutPattern(BaseModel):
+    page_margins: str | None = None
+    content_padding: str | None = None
+    section_spacing: str | None = None
+    component_gaps: str | None = None
+    card_padding: str | None = None
+    grid_arrangements: str | None = None
+    alignment_patterns: str | None = None
+    content_width_patterns: str | None = None
+    confidence: float = 0.8
+
+
+class ShapeSurfacePattern(BaseModel):
+    border_radii: list[str] = Field(default_factory=list)
+    card_shapes: str | None = None
+    input_shapes: str | None = None
+    button_shapes: str | None = None
+    borders: str | None = None
+    shadows: list[str] = Field(default_factory=list)
+    elevation_patterns: str | None = None
+    surface_treatments: str | None = None
+    confidence: float = 0.85
+
+
+class ComponentPattern(BaseModel):
+    component_category: str  # button.primary, input.text, card.standard, navbar, tab.bar, badge, etc.
+    visual_description: str
+    screens: list[int] = Field(default_factory=list)
+    observed_occurrences: int = 1
+    common_characteristics: str
+    variations: list[str] = Field(default_factory=list)
+    confidence: float = 0.9
+    evidence_references: str = "observed"
+    recommended_component_spec: str
+
+
+class ProposedDesignToken(BaseModel):
+    name: str  # color.primary, typography.heading.large, spacing.4, radius.medium, shadow.small
+    value: str
+    category: str  # color, typography, spacing, radius, shadow
+    confidence: float = 0.9
+    evidence: str = "observed"  # observed, approximate, inferred
+    screens: list[int] = Field(default_factory=list)
+    classification: str = "observed"
+
+
+class DesignConsistencyIssue(BaseModel):
+    id: str | None = None
+    category: str  # color, typography, components, spacing, surfaces, navigation
+    title: str
+    description: str
+    severity: Literal["critical", "high", "medium", "low"] = "medium"
+    confidence: float = 0.85
+    affected_screens: list[int] = Field(default_factory=list)
+    evidence: str
+    recommended_fix: str
+
+
+class DesignSystemReportRead(BaseModel):
+    id: UUID
+    project_id: UUID
+    audit_id: UUID
+    status: str
+    consistency_score: float | None = None
+    score_breakdown: dict[str, float] = Field(default_factory=dict)
+    extraction_coverage: float | None = None
+    confidence: float | None = None
+    summary: str | None = None
+    screens_analyzed: int = 0
+    color_palette: list[ExtractedColor] = Field(default_factory=list)
+    typography: list[ExtractedTypography] = Field(default_factory=list)
+    spacing_layout: SpacingLayoutPattern = Field(default_factory=SpacingLayoutPattern)
+    shapes_surfaces: ShapeSurfacePattern = Field(default_factory=ShapeSurfacePattern)
+    components: list[ComponentPattern] = Field(default_factory=list)
+    tokens: list[ProposedDesignToken] = Field(default_factory=list)
+    consistency_issues: list[DesignConsistencyIssue] = Field(default_factory=list)
+    recommendations: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+    stitch_prompt: str | None = None
+    provider: str
+    model: str
+    error_message: str | None = None
+    created_at: datetime
+    completed_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DesignSystemExportJson(BaseModel):
+    design_system_id: str
+    audit_id: str
+    project_id: str
+    consistency_score: float | None
+    generated_at: str
+    tokens: dict[str, dict[str, str]]
+    colors: list[ExtractedColor]
+    typography: list[ExtractedTypography]
+    components: list[ComponentPattern]
+
+
+class DesignSystemExportCss(BaseModel):
+    css_content: str
+    token_count: int
+
+
+class DesignSystemPromptRequest(BaseModel):
+    custom_instructions: str | None = None
+    include_inconsistencies: bool = True
+    include_tokens: bool = True
+
+
+class DesignSystemPromptResponse(BaseModel):
+    prompt: str
+    tokens_included: int
+    issues_addressed: int
+    screens_referenced: int
+
+

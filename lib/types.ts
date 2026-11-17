@@ -233,3 +233,131 @@ export interface FlowReport {
   completed_at?: string | null;
 }
 
+// Phase 08: Design System Intelligence Types
+
+export interface ExtractedColor {
+  hex: string;
+  semantic_name: string;
+  category: string;
+  screens: number[];
+  frequency: string;
+  confidence: number;
+  evidence: "observed" | "approximate" | "inferred";
+}
+
+export interface ExtractedTypography {
+  style_name: string;
+  font_size_approx: string;
+  font_weight_category: string;
+  text_hierarchy: string;
+  alignment: string;
+  line_height_estimate?: string | null;
+  screens: number[];
+  confidence: number;
+  evidence: "observed" | "approximate" | "inferred";
+}
+
+export interface SpacingLayoutPattern {
+  page_margins?: string | null;
+  content_padding?: string | null;
+  section_spacing?: string | null;
+  component_gaps?: string | null;
+  card_padding?: string | null;
+  grid_arrangements?: string | null;
+  alignment_patterns?: string | null;
+  content_width_patterns?: string | null;
+  confidence: number;
+}
+
+export interface ShapeSurfacePattern {
+  border_radii: string[];
+  card_shapes?: string | null;
+  input_shapes?: string | null;
+  button_shapes?: string | null;
+  borders?: string | null;
+  shadows: string[];
+  elevation_patterns?: string | null;
+  surface_treatments?: string | null;
+  confidence: number;
+}
+
+export interface ComponentPattern {
+  component_category: string;
+  visual_description: string;
+  screens: number[];
+  observed_occurrences: number;
+  common_characteristics: string;
+  variations: string[];
+  confidence: number;
+  evidence_references: string;
+  recommended_component_spec: string;
+}
+
+export interface ProposedDesignToken {
+  name: string;
+  value: string;
+  category: string;
+  confidence: number;
+  evidence: string;
+  screens: number[];
+  classification: "observed" | "approximate" | "inferred";
+}
+
+export interface DesignConsistencyIssue {
+  id?: string | null;
+  category: string;
+  title: string;
+  description: string;
+  severity: "critical" | "high" | "medium" | "low";
+  confidence: number;
+  affected_screens: number[];
+  evidence: string;
+  recommended_fix: string;
+}
+
+export interface DesignSystemReport {
+  id: string;
+  project_id: string;
+  audit_id: string;
+  status: "pending" | "analyzing" | "completed" | "failed";
+  consistency_score?: number | null;
+  score_breakdown: Record<string, number>;
+  extraction_coverage?: number | null;
+  confidence?: number | null;
+  summary?: string | null;
+  screens_analyzed: number;
+  color_palette: ExtractedColor[];
+  typography: ExtractedTypography[];
+  spacing_layout: SpacingLayoutPattern;
+  shapes_surfaces: ShapeSurfacePattern;
+  components: ComponentPattern[];
+  tokens: ProposedDesignToken[];
+  consistency_issues: DesignConsistencyIssue[];
+  recommendations: string[];
+  limitations: string[];
+  stitch_prompt?: string | null;
+  provider: string;
+  model: string;
+  error_message?: string | null;
+  created_at: string;
+  completed_at?: string | null;
+}
+
+export interface DesignSystemExportJson {
+  design_system_id: string;
+  audit_id: string;
+  project_id: string;
+  consistency_score: number | null;
+  generated_at: string;
+  tokens: Record<string, Record<string, string>>;
+  colors: ExtractedColor[];
+  typography: ExtractedTypography[];
+  components: ComponentPattern[];
+}
+
+export interface DesignSystemExportCss {
+  css_content: string;
+  token_count: number;
+}
+
+

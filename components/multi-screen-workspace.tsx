@@ -234,6 +234,14 @@ export function MultiScreenWorkspace({ auditId, projectId, auditName }: MultiScr
           )}
 
           <Button
+            variant="secondary"
+            href={`/design-system`}
+          >
+            <Icon name="layers" size={14} />
+            Design System
+          </Button>
+
+          <Button
             variant="primary"
             onClick={handleGeneratePrompt}
             disabled={selectedFindingIds.size === 0 || generatingPrompt || !isAnalyzed}
