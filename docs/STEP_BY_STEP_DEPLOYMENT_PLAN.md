@@ -9,6 +9,18 @@
 
 ---
 
+## Deployment Status Tracker
+
+| Phase | Description | Status | Details |
+|---|---|---|---|
+| **Phase 1** | Supabase Project, Schema & Auth | ✅ **COMPLETED** | Project `edlkpfrlsrgslcdwjykv` linked, 20 tables created, RLS enabled, `forteux-private-assets` bucket created, security hardening applied. |
+| **Phase 2** | FastAPI Backend Deployment | ⏳ **NEXT UP** | Deploy container via [backend/Dockerfile](file:///c:/Users/Musa%20A.%20Abubakar/Desktop/forteux/backend/Dockerfile) to Railway / Cloud Run with Supabase pooler connection. |
+| **Phase 3** | Vercel Frontend Deployment | ⏳ **PENDING** | Connect GitHub repo to Vercel, configure environment variables, deploy, and bind domains. |
+| **Phase 4** | Production Smoke Testing | ⏳ **PENDING** | Verify user registration, Google OAuth, onboarding, audit analysis, bounding boxes, and exports. |
+| **Phase 5** | Production Monitoring & Alerting | ⏳ **PENDING** | Uptime monitoring on `/health/live` and Vercel Analytics setup. |
+
+---
+
 ## Architecture Flow
 
 ```
@@ -22,15 +34,15 @@
       └── Reverse Proxy (/api/backend/* ──► FastAPI backend with Authorization header)
           │
           ▼ HTTPS
-   [ Container: FastAPI Backend ] (e.g. api.forteux.ai)
+   [ Container: FastAPI Backend ] (e.g. api.forteux.ai on Railway / Cloud Run)
       ├── JWT Verification (Validates Supabase Bearer token against JWKS)
       ├── Business Logic & AI Vision Analysis (Google Gemini API)
       ├── Async Background Tasks & Export Generation
       ├── Direct Storage Presigning (Supabase S3)
       └── Database Connection Pool (SQLAlchemy + asyncpg/psycopg)
           │
-          ▼ SSL (Port 6543 / 5432)
-   [ Supabase Cloud ]
+          ▼ SSL (Port 6543)
+   [ Supabase Cloud ] (Project: edlkpfrlsrgslcdwjykv)
       ├── PostgreSQL 15+ (With RLS Policies & Profiles Sync Trigger)
       ├── Auth Engine (Email/Password, Google OAuth 2.0 PKCE)
       └── S3 Storage (`forteux-private-assets` Bucket)
@@ -38,127 +50,99 @@
 
 ---
 
-## Pre-Deployment Checklist & Accounts Required
+## Phase 1: Supabase Configuration (COMPLETED ✅)
 
-Before starting, ensure you have active accounts for:
-1. **GitHub:** Repository access (`https://github.com/musaabduljnr/forteux`)
-2. **Supabase Cloud:** `https://supabase.com`
-3. **Google Cloud Console:** `https://console.cloud.google.com` (for Google OAuth credentials & Gemini API key from AI Studio)
-4. **FastAPI Container Host:** **Railway** (`https://railway.app`) or **Google Cloud Run**
-5. **Vercel:** `https://vercel.com`
+### 1.1 Project Information
+- **Project Name:** `forteux-prod`
+- **Project Reference ID:** `edlkpfrlsrgslcdwjykv`
+- **Project URL:** `https://edlkpfrlsrgslcdwjykv.supabase.co`
+- **Auth Endpoint:** `https://edlkpfrlsrgslcdwjykv.supabase.co/auth/v1`
+- **Storage S3 Endpoint:** `https://edlkpfrlsrgslcdwjykv.supabase.co/storage/v1/s3`
 
----
+### 1.2 Migrations & Schemas Applied
+All schemas were pushed directly to the remote database and are tracked under [`supabase/migrations/`](file:///c:/Users/Musa%20A.%20Abubakar/Desktop/forteux/supabase/migrations/):
+1. **`20261119000001_core_schema.sql`**  
+   ✅ 20 application tables created (`tenants`, `users`, `projects`, `audits`, `audit_screens`, `findings`, `knowledge_chunks`, `design_system_analyses`, `export_jobs`, etc.).  
+   ✅ `alembic_version` stamped at head revision `0007_phase09_project_history_exports`.
+2. **`20261119000002_user_profiles.sql`**  
+   ✅ `public.profiles` created for user metadata, role, and onboarding steps.  
+   ✅ `on_auth_user_created` trigger active on `auth.users` for automatic profile provisioning.
+3. **`20261119000003_supabase_rls.sql`**  
+   ✅ Row Level Security enabled across all tables with tenant isolation policies and `service_role` backend bypass.
+4. **`20261119000004_storage_bucket.sql`**  
+   ✅ Private bucket **`forteux-private-assets`** created (25MB file limit, restricted to images and PDFs) with folder-level user RLS.
+5. **`20261119000005_security_hardening.sql`**  
+   ✅ Security definer functions hardened with fixed `search_path`, public execution revoked on internal RPCs, and RLS initPlan subquery optimization applied.
 
-## Phase 1: Supabase Configuration
-
-### Step 1.1: Create New Supabase Project
-1. Log in to [Supabase Dashboard](https://supabase.com/dashboard).
-2. Click **New Project**.
-3. Select your Organization, name the project `forteux-prod`, and choose a database region closest to your primary user base (e.g., `us-east-1` Washington D.C. or `eu-central-1` Frankfurt).
-4. Save the **Database Password** in a secure password manager.
-
-### Step 1.2: Retrieve Project Credentials
-Go to **Project Settings** -> **API** and copy:
-- `Project URL` = https://edlkpfrlsrgslcdwjykv.supabase.co
-- `Project Reference ID` = edlkpfrlsrgslcdwjykv
-- `anon public` key = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVkbGtwZnJsc3Jnc2xjZHdqeWt2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUwODk2MTYsImV4cCI6MjExMDY2NTYxNn0.WEyCX_UpiyMCGepxQSeYgFDn0y4uCn8eaIGFpnlU-gA
-- `service_role secret` eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVkbGtwZnJsc3Jnc2xjZHdqeWt2Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5NTA4OTYxNiwiZXhwIjoyMTEwNjY1NjE2fQ.d0aj39gx9Ab1kIe6qZF8VUaquZypZHx4avzgAV54XiA
-- `JWT Secret` = AX4yhN9OyIkZfoZ7PgJynOZAHfUdSctAvflFcoH4QDCL3JSsgu5HpRuJJg3CLbn1DqFeIRnyJHG/8PZXp0j3Ww==
-
-Go to **Project Settings** -> **Database** and copy:
-- **Connection Pooling String (Transaction mode, port 6543)**:
-  `postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres`
-
-### Step 1.3: Run Database Migrations & Schemas
-Open **Supabase Dashboard** -> **SQL Editor** and execute the following scripts in order:
-
-1. **Alembic Base Schema:**
-   Run migrations from your local repository to create the core tables:
-   ```bash
-   cd backend
-   # Set DATABASE_URL to your Supabase connection string
-   $env:DATABASE_URL="postgresql+psycopg://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres?sslmode=require"
-   alembic upgrade head
-   ```
-2. **User Profiles Table & Auto-Sync Trigger:**
-   Run the contents of [backend/migrations/create_user_profiles.sql](file:///c:/Users/Musa%20A.%20Abubakar/Desktop/forteux/backend/migrations/create_user_profiles.sql) in Supabase SQL Editor.
-   *(This automatically creates a row in `public.profiles` whenever a user registers via email or Google OAuth).*
-3. **Row Level Security (RLS) Policies:**
-   Run the contents of [backend/migrations/supabase_rls.sql](file:///c:/Users/Musa%20A.%20Abubakar/Desktop/forteux/backend/migrations/supabase_rls.sql) in Supabase SQL Editor.
-   *(This guarantees tenant data isolation on projects, screens, audits, and findings).*
-
-### Step 1.4: Configure Storage Bucket & S3 Credentials
-1. Go to **Storage** in the Supabase sidebar.
-2. Click **New Bucket**:
-   - Name: `forteux-private-assets`
-   - Public bucket: **Disabled (Private)**
-   - Allowed MIME types: `image/png, image/jpeg, image/webp, application/pdf`
-   - Max file size: `25MB`
-3. Generate S3 Access Keys for FastAPI:
-   - Go to **Project Settings** -> **Storage** -> **S3 Access Keys**.
-   - Click **Generate New Key**.
-   - Copy `Access Key ID` and `Secret Access Key`.
-
-### Step 1.5: Configure Google OAuth 2.0
-1. Go to [Google Cloud Console Credentials](https://console.cloud.google.com/apis/credentials).
-2. Configure **OAuth consent screen** (App name: Forteux, Support email, User type: External).
-3. Create an **OAuth 2.0 Client ID**:
-   - Application type: **Web application**
-   - Authorized redirect URIs:
-     - `https://<your-project-ref>.supabase.co/auth/v1/callback`
-4. Copy `Client ID` and `Client Secret`.
-5. Back in **Supabase Dashboard** -> **Authentication** -> **Providers** -> **Google**:
-   - Enable Google provider.
-   - Paste `Client ID` and `Client Secret`.
-   - Save.
-6. In **Authentication** -> **URL Configuration**:
-   - **Site URL:** `https://app.forteux.ai` (or your production Vercel URL)
-   - **Redirect URLs:** Add:
+### 1.3 Google OAuth & Auth URLs in Supabase Dashboard
+To finalize Google OAuth in the Supabase Dashboard:
+1. Go to **Authentication** -> **Providers** -> **Google**:
+   - Toggle **Enable Google provider**.
+   - **Client ID:** `1064517195987-3v6krdvapnhsaes5qe6thmqg8rf591qj.apps.googleusercontent.com`
+   - **Client Secret:** Paste your Google Client Secret (`GOCSPX-...`).
+   - Click **Save**.
+2. Go to **Google Cloud Console** -> **Credentials** -> Your OAuth Client:
+   - Ensure **Authorized redirect URI** contains:
+     ```
+     https://edlkpfrlsrgslcdwjykv.supabase.co/auth/v1/callback
+     ```
+3. In Supabase Dashboard -> **Authentication** -> **URL Configuration**:
+   - **Site URL:** `https://app.forteux.ai` (or your initial Vercel domain)
+   - **Redirect URLs:**
      - `https://app.forteux.ai/auth/callback`
-     - `https://*.vercel.app/auth/callback` (for branch previews)
-     - `http://localhost:3000/auth/callback` (for local development)
+     - `https://*.vercel.app/auth/callback`
+     - `http://localhost:3000/auth/callback`
 
 ---
 
 ## Phase 2: FastAPI Backend Deployment (Dedicated Container)
 
 > **Recommended Platform:** Railway, Google Cloud Run, or Render.  
-> The repository already contains a production-ready [backend/Dockerfile](file:///c:/Users/Musa%20A.%20Abubakar/Desktop/forteux/backend/Dockerfile).
+> The repository already includes a verified, production-ready [backend/Dockerfile](file:///c:/Users/Musa%20A.%20Abubakar/Desktop/forteux/backend/Dockerfile).
 
-### Option A: Deploying on Railway (Easiest & Fastest)
+### Step 2.1: Deploying on Railway (Recommended)
 1. Log in to [Railway.app](https://railway.app).
 2. Click **New Project** -> **Deploy from GitHub repo**.
 3. Select `musaabduljnr/forteux`.
 4. In Settings:
    - **Root Directory:** `/backend`
    - **Builder:** Dockerfile (`/backend/Dockerfile`)
-5. In **Variables**, add the following environment variables:
+5. In **Variables**, add the following production environment variables:
 
-| Variable | Value |
-|---|---|
-| `APP_ENV` | `production` |
-| `LOG_LEVEL` | `INFO` |
-| `API_PREFIX` | `/api/v1` |
-| `DATABASE_URL` | `postgresql+psycopg://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres?sslmode=require` |
-| `OIDC_ISSUER` | `https://<ref>.supabase.co/auth/v1` |
-| `OIDC_CLIENT_ID` | `authenticated` |
-| `OIDC_JWKS_URL` | `https://<ref>.supabase.co/auth/v1/.well-known/jwks.json` |
-| `SUPABASE_URL` | `https://<ref>.supabase.co` |
-| `SUPABASE_JWT_SECRET` | `<your-supabase-jwt-secret>` |
-| `DEV_AUTH_ENABLED` | `false` |
-| `AWS_REGION` | `us-east-1` |
-| `AWS_ACCESS_KEY_ID` | `<supabase-s3-access-key-id>` |
-| `AWS_SECRET_ACCESS_KEY` | `<supabase-s3-secret-access-key>` |
-| `S3_BUCKET` | `forteux-private-assets` |
-| `S3_ENDPOINT_URL` | `https://<ref>.supabase.co/storage/v1/s3` |
-| `ALLOWED_ORIGINS` | `https://app.forteux.ai,https://forteux.ai,https://*.vercel.app` |
-| `GEMINI_API_KEY` | `<your-google-ai-studio-gemini-key>` |
+| Variable | Value | Notes |
+|---|---|---|
+| `APP_ENV` | `production` | Enables strict production guards |
+| `LOG_LEVEL` | `INFO` | Standard application logging |
+| `API_PREFIX` | `/api/v1` | Base API prefix |
+| `DATABASE_URL` | `postgresql+psycopg://postgres.edlkpfrlsrgslcdwjykv:<DB_PASSWORD>@aws-0-eu-west-1.pooler.supabase.com:6543/postgres?sslmode=require` | Use Supabase Transaction Pooler (port 6543) |
+| `OIDC_ISSUER` | `https://edlkpfrlsrgslcdwjykv.supabase.co/auth/v1` | Supabase Auth issuer |
+| `OIDC_CLIENT_ID` | `authenticated` | Expected token audience |
+| `OIDC_JWKS_URL` | `https://edlkpfrlsrgslcdwjykv.supabase.co/auth/v1/.well-known/jwks.json` | Public JWKS endpoint |
+| `SUPABASE_URL` | `https://edlkpfrlsrgslcdwjykv.supabase.co` | Project URL |
+| `SUPABASE_JWT_SECRET` | `<YOUR_SUPABASE_JWT_SECRET>` | Found in Supabase Settings -> API |
+| `DEV_AUTH_ENABLED` | `false` | Must remain false in production |
+| `AWS_REGION` | `eu-west-1` | Supabase project region |
+| `AWS_ACCESS_KEY_ID` | `<SUPABASE_S3_ACCESS_KEY_ID>` | From Supabase Storage -> S3 Access Keys |
+| `AWS_SECRET_ACCESS_KEY` | `<SUPABASE_S3_SECRET_ACCESS_KEY>` | From Supabase Storage -> S3 Access Keys |
+| `S3_BUCKET` | `forteux-private-assets` | Target bucket name |
+| `S3_ENDPOINT_URL` | `https://edlkpfrlsrgslcdwjykv.supabase.co/storage/v1/s3` | Storage S3 gateway |
+| `ALLOWED_ORIGINS` | `https://app.forteux.ai,https://forteux.ai,https://*.vercel.app` | CORS origins |
+| `GEMINI_API_KEY` | `<YOUR_GEMINI_API_KEY>` | Google AI Studio Gemini API key |
 
-6. In **Settings** -> **Networking**, click **Generate Domain** or assign custom domain `api.forteux.ai`.
-7. **Verify deployment:**
-   Send a GET request to:
-   `https://api.forteux.ai/health/ready`
-   Should return: `{"status": "ready", "database": "connected", "storage": "connected"}`.
+### Step 2.2: Networking & Health Check Verification
+1. In Railway **Settings** -> **Networking**, click **Generate Domain** (e.g. `forteux-backend.up.railway.app`) or configure your custom domain `api.forteux.ai`.
+2. Verify deployment readiness by visiting:
+   ```
+   https://<your-backend-url>/health/ready
+   ```
+   Expected response:
+   ```json
+   {
+     "status": "ready",
+     "database": "connected",
+     "storage": "connected"
+   }
+   ```
 
 ---
 
@@ -173,30 +157,30 @@ Open **Supabase Dashboard** -> **SQL Editor** and execute the following scripts 
 6. Build Command: `npm run build`.
 7. Output Directory: `.next`.
 
-### Step 3.2: Set Environment Variables on Vercel
-Under **Settings** -> **Environment Variables**, configure:
+### Step 3.2: Configure Environment Variables on Vercel
+Under **Settings** -> **Environment Variables**, add:
 
 | Variable Name | Environments | Value |
 |---|---|---|
-| `NEXT_PUBLIC_SUPABASE_URL` | Production, Preview | `https://<your-project-ref>.supabase.co` |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Production, Preview | `<your-supabase-anon-key>` |
-| `SUPABASE_SERVICE_ROLE_KEY` | Production, Preview | `<your-supabase-service-role-key>` |
-| `BACKEND_API_URL` | Production | `https://api.forteux.ai/api/v1` |
-| `BACKEND_API_URL` | Preview | `https://api.forteux.ai/api/v1` |
+| `NEXT_PUBLIC_SUPABASE_URL` | Production, Preview | `https://edlkpfrlsrgslcdwjykv.supabase.co` |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Production, Preview | `<YOUR_SUPABASE_ANON_KEY>` |
+| `SUPABASE_SERVICE_ROLE_KEY` | Production, Preview | `<YOUR_SUPABASE_SERVICE_ROLE_KEY>` |
+| `BACKEND_API_URL` | Production | `https://<your-backend-url>/api/v1` |
+| `BACKEND_API_URL` | Preview | `https://<your-backend-url>/api/v1` |
 | `NEXTAUTH_URL` | Production | `https://app.forteux.ai` |
 | `NEXTAUTH_URL` | Preview | `https://${VERCEL_URL}` |
-| `NEXTAUTH_SECRET` | Production, Preview | `<generate-32-byte-hex-string>` |
+| `NEXTAUTH_SECRET` | Production, Preview | `<GENERATE_32_BYTE_HEX_KEY>` |
 | `DEV_AUTH_ENABLED` | Production, Preview | `false` |
 | `NEXT_PUBLIC_DEV_AUTH_ENABLED` | Production, Preview | `false` |
 
-*(To generate a 32-byte secret in PowerShell: `[Convert]::ToHexString((1..32 | ForEach-Object { Get-Random -Maximum 256 }))`)*
+*(To generate a random 32-byte secret in PowerShell: `[Convert]::ToHexString((1..32 | ForEach-Object { Get-Random -Maximum 256 }))`)*
 
 ### Step 3.3: Deploy & Configure Domains
-1. Click **Deploy**. Vercel will install dependencies and compile the Next.js App Router routes.
+1. Click **Deploy**. Vercel will install dependencies and compile all Next.js routes.
 2. In **Settings** -> **Domains**:
-   - Add your apex domain: `forteux.ai`
-   - Add your app subdomain: `app.forteux.ai`
-3. Configure your DNS provider (e.g. Cloudflare, Namecheap, Route 53):
+   - Add apex domain: `forteux.ai`
+   - Add app subdomain: `app.forteux.ai`
+3. Point your DNS records to Vercel:
    - `CNAME` for `app` -> `cname.vercel-dns.com`
    - `A` record for `@` -> `76.76.21.21`
 
@@ -204,31 +188,32 @@ Under **Settings** -> **Environment Variables**, configure:
 
 ## Phase 4: Production Verification & Smoke Testing
 
-Once both services are deployed, perform the following end-to-end verification tests:
+Once both services are deployed, perform the following verification walkthrough:
 
-| Step | Test Description | Expected Result |
-|---|---|---|
-| **1** | Navigate to `https://forteux.ai` | Landing page renders with responsive styling, navigation, and features |
-| **2** | Click **Get Started** or visit `/register` | Registration form renders without hydration errors |
-| **3** | Register a new user with email & password | User profile created in Supabase `profiles` table; redirects to `/onboarding` |
-| **4** | Complete 4-step onboarding | Onboarding marks profile complete; redirects to `/dashboard` with dynamic greeting |
-| **5** | Log out and click **Sign in with Google** | Google OAuth consent loads; redirects back to `/dashboard` successfully |
-| **6** | Create a Project | Project row stored in Supabase with user's UUID |
-| **7** | Upload screenshot & run audit | Image presigned to Supabase Storage; FastAPI triggers Gemini vision audit; findings with bounding boxes display |
-| **8** | Check RLS Isolation | In Supabase, create a 2nd user; verify 2nd user cannot view 1st user's projects or audits |
-| **9** | Test Export Feature | Download PDF/JSON report of audit findings; file downloads successfully |
+| Test ID | Test Flow | Verification Step | Expected Result |
+|---|---|---|---|
+| **SMOKE-01** | Public Landing | Open `https://forteux.ai` | Landing page loads with responsive styles, navigation, and zero console errors. |
+| **SMOKE-02** | Registration | Go to `/register` and submit email/password | User created in Supabase Auth; row inserted into `public.profiles`; redirects to `/onboarding`. |
+| **SMOKE-03** | Onboarding | Complete 4-step wizard | Onboarding fields saved; `onboarding_completed=true`; redirects to `/dashboard`. |
+| **SMOKE-04** | Google OAuth | Log out, click **Continue with Google** | Google consent screen displays; redirects to `/auth/callback` then `/dashboard`. |
+| **SMOKE-05** | Project Creation | Click **New Project** in dashboard | Project stored in Supabase with authenticated user UUID. |
+| **SMOKE-06** | Single Audit | Upload UI screenshot and run audit | Image presigned to Supabase Storage; FastAPI Gemini vision audit runs; findings and bounding boxes display. |
+| **SMOKE-07** | Design System | Run extraction on audit | Design tokens, typography, and color palette extracted successfully. |
+| **SMOKE-08** | Stitch Prompt | Select findings and generate prompt | Comprehensive Google Stitch redesign prompt generated. |
+| **SMOKE-09** | Export | Download audit report (JSON/PDF) | Export file generated and downloaded cleanly. |
+| **SMOKE-10** | Tenant Isolation | Log in as User B | User B cannot view User A's projects, audits, or screenshots (enforced by RLS). |
 
 ---
 
 ## Phase 5: Monitoring, Alerting & Rollback Strategy
 
-1. **Vercel Web Analytics & Speed Insights:**
-   Enable under Vercel Dashboard -> **Analytics** to monitor Core Web Vitals and 5xx errors.
-2. **FastAPI Health Monitoring:**
-   Configure an uptime monitor (e.g. BetterStack, UptimeRobot) pinging:
-   - `https://api.forteux.ai/health/live` every 60 seconds
-3. **Rollback Plan:**
-   - **Frontend:** In Vercel Deployments tab, click `...` next to the previous healthy deployment and select **Instant Rollback**.
-   - **Backend:** In Railway/Cloud Run, select the prior deployment revision and click **Rollback**.
-4. **Database Backups:**
-   Supabase automatically takes daily WAL backups. Before any schema alterations, take a manual backup in **Supabase Dashboard** -> **Database** -> **Backups**.
+1. **Uptime Monitoring:**  
+   Configure uptime monitoring (BetterStack, UptimeRobot, or Cloudflare Health Checks) pinging:
+   - Frontend: `https://app.forteux.ai` (every 5 minutes)
+   - Backend: `https://<your-backend-url>/health/live` (every 60 seconds)
+2. **Instant Rollback:**
+   - **Frontend (Vercel):** Go to Deployments, find the previous stable deployment, and click **Rollback**.
+   - **Backend (Railway):** Go to Deployments, select previous deployment revision, click **Redeploy**.
+3. **Database Safeguards:**
+   - Supabase automatically performs continuous daily WAL backups.
+   - For major version upgrades or schema changes, take a manual backup in **Supabase Dashboard** -> **Database** -> **Backups**.
