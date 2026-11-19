@@ -59,11 +59,11 @@ Before starting, ensure you have active accounts for:
 
 ### Step 1.2: Retrieve Project Credentials
 Go to **Project Settings** -> **API** and copy:
-- `Project URL` (e.g., `https://abcdefghijklm.supabase.co`)
-- `Project Reference ID` (e.g., `abcdefghijklm`)
-- `anon public` key
-- `service_role secret` key
-- `JWT Secret`
+- `Project URL` = https://edlkpfrlsrgslcdwjykv.supabase.co
+- `Project Reference ID` = edlkpfrlsrgslcdwjykv
+- `anon public` key = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVkbGtwZnJsc3Jnc2xjZHdqeWt2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUwODk2MTYsImV4cCI6MjExMDY2NTYxNn0.WEyCX_UpiyMCGepxQSeYgFDn0y4uCn8eaIGFpnlU-gA
+- `service_role secret` eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVkbGtwZnJsc3Jnc2xjZHdqeWt2Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5NTA4OTYxNiwiZXhwIjoyMTEwNjY1NjE2fQ.d0aj39gx9Ab1kIe6qZF8VUaquZypZHx4avzgAV54XiA
+- `JWT Secret` = AX4yhN9OyIkZfoZ7PgJynOZAHfUdSctAvflFcoH4QDCL3JSsgu5HpRuJJg3CLbn1DqFeIRnyJHG/8PZXp0j3Ww==
 
 Go to **Project Settings** -> **Database** and copy:
 - **Connection Pooling String (Transaction mode, port 6543)**:
