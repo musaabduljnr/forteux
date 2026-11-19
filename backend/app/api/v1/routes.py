@@ -13,6 +13,8 @@ from sqlalchemy.orm import Session
 from app.api.v1.schemas import (
     AnalysisJobRead,
     AnalysisResponse,
+    AnalysisComparisonRead,
+    AnalysisVersionRead,
     AssetDownloadRead,
     AssetRead,
     AuditContextUpdate,
@@ -33,6 +35,8 @@ from app.api.v1.schemas import (
     DevTokenRequest,
     DevTokenResponse,
     DocumentVersionRead,
+    ExportJobCreate,
+    ExportJobRead,
     ExtractedColor,
     ExtractedTypography,
     FindingEvidenceRead,
@@ -50,8 +54,12 @@ from app.api.v1.schemas import (
     MultiScreenAnalysisResponse,
     MultiScreenBoundingBoxRead,
     MultiScreenFindingRead,
+    PaginatedAuditsResponse,
+    ProjectActivityEventRead,
     ProjectCreate,
     ProjectRead,
+    ProjectReadFull,
+    ProjectUpdate,
     PromptGenerateRequest,
     PromptRead,
     PromptUpdateRequest,
@@ -72,12 +80,14 @@ from app.db.models import (
     DeletionTask,
     DesignSystemAnalysis,
     DocumentVersion,
+    ExportJob,
     Finding,
     FindingEvidence,
     KnowledgeChunk,
     KnowledgeDocument,
     Membership,
     Project,
+    ProjectActivityEvent,
     PromptVersion,
     ScreenAsset,
 )
@@ -100,6 +110,7 @@ from app.services.multi_screen_vision import (
 )
 from app.services.prompt_generator import StitchPromptGenerator
 from app.services.storage import S3Storage, get_storage
+from app.services.export_service import generate_export_content
 
 router = APIRouter()
 
@@ -147,6 +158,80 @@ def _safe_filename(filename: str) -> str:
     return cleaned[:255]
 
 
+def _log_activity(
+    db: Session,
+    tenant_id: UUID,
+    project_id: UUID,
+    event_type: str,
+    description: str,
+    resource_id: UUID | None = None,
+    resource_type: str | None = None,
+) -> ProjectActivityEvent:
+    event = ProjectActivityEvent(
+        tenant_id=tenant_id,
+        project_id=project_id,
+        event_type=event_type,
+        resource_id=resource_id,
+        resource_type=resource_type,
+        description=description[:500],
+    )
+    db.add(event)
+    return event
+
+
+def _populate_project_full(project: Project, db: Session) -> ProjectReadFull:
+    from sqlalchemy import func
+
+    audit_count = (
+        db.scalar(
+            select(func.count(Audit.id)).where(
+                Audit.project_id == project.id,
+                Audit.tenant_id == project.tenant_id,
+                Audit.deleted_at.is_(None),
+            )
+        )
+        or 0
+    )
+    screen_count = (
+        db.scalar(
+            select(func.count(AuditScreen.id))
+            .join(Audit, Audit.id == AuditScreen.audit_id)
+            .where(
+                Audit.project_id == project.id,
+                Audit.tenant_id == project.tenant_id,
+                Audit.deleted_at.is_(None),
+            )
+        )
+        or 0
+    )
+    design_system_count = (
+        db.scalar(
+            select(func.count(DesignSystemAnalysis.id)).where(
+                DesignSystemAnalysis.project_id == project.id,
+                DesignSystemAnalysis.tenant_id == project.tenant_id,
+                DesignSystemAnalysis.status == "completed",
+            )
+        )
+        or 0
+    )
+
+    return ProjectReadFull(
+        id=project.id,
+        name=project.name,
+        description=project.description,
+        category=project.category,
+        platform_type=project.platform_type,
+        thumbnail_url=project.thumbnail_url,
+        context_text=project.context_text,
+        archived_at=project.archived_at,
+        created_at=project.created_at,
+        updated_at=project.updated_at,
+        audit_count=audit_count,
+        screen_count=screen_count,
+        design_system_count=design_system_count,
+    )
+
+
 @router.get("/me")
 def read_current_user(
     principal: Principal = Depends(get_current_principal),
@@ -189,12 +274,81 @@ def create_project(
         tenant_id=principal.tenant_id,
         name=body.name,
         description=body.description,
+        category=body.category,
+        platform_type=body.platform_type,
+        thumbnail_url=body.thumbnail_url,
+        context_text=body.context_text,
         created_by=principal.id,
     )
     db.add(project)
+    db.flush()
+    _log_activity(
+        db,
+        principal.tenant_id,
+        project.id,
+        "project_created",
+        f"Project '{project.name}' created",
+        project.id,
+        "project",
+    )
     db.commit()
     db.refresh(project)
     return project
+
+
+@router.get("/projects/history", response_model=PaginatedAuditsResponse)
+def get_cross_project_audit_history(
+    page: int = 1,
+    page_size: int = 20,
+    mode: str = "all",
+    status: str = "all",
+    sort: str = "newest",
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> PaginatedAuditsResponse:
+    if page < 1:
+        page = 1
+    if page_size < 1 or page_size > 100:
+        page_size = 20
+
+    from sqlalchemy import func
+
+    query = (
+        select(Audit)
+        .join(Project, Project.id == Audit.project_id)
+        .join(Membership, Membership.tenant_id == Project.tenant_id)
+        .where(
+            Audit.tenant_id == principal.tenant_id,
+            Audit.deleted_at.is_(None),
+            Project.deleted_at.is_(None),
+            Membership.user_id == principal.id,
+            Membership.tenant_id == principal.tenant_id,
+        )
+    )
+
+    if mode in ("single", "multi"):
+        query = query.where(Audit.mode == mode)
+
+    if status != "all":
+        query = query.where(Audit.status == status)
+
+    total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+
+    if sort == "oldest":
+        query = query.order_by(Audit.created_at.asc())
+    else:
+        query = query.order_by(Audit.created_at.desc())
+
+    offset = (page - 1) * page_size
+    query = query.offset(offset).limit(page_size)
+    items = list(db.scalars(query))
+
+    return PaginatedAuditsResponse(
+        items=[AuditRead.model_validate(a) for a in items],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.get("/projects/{project_id}", response_model=ProjectRead)
@@ -224,6 +378,16 @@ def create_audit(
         context_json=json.dumps(body.context),
     )
     db.add(audit)
+    db.flush()
+    _log_activity(
+        db,
+        principal.tenant_id,
+        project.id,
+        "audit_created",
+        f"Audit '{audit.name}' ({audit.mode}-screen) created",
+        audit.id,
+        "audit",
+    )
     db.commit()
     db.refresh(audit)
     return audit
@@ -2968,5 +3132,459 @@ def list_project_design_systems(
         )
     )
     return [_populate_design_system_read(a) for a in analyses]
+
+
+# ===========================================================================
+# Phase 09: Project History, Versions & Export Endpoints
+# ===========================================================================
+
+
+@router.patch("/projects/{project_id}", response_model=ProjectReadFull)
+def update_project(
+    project_id: UUID,
+    body: ProjectUpdate,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> ProjectReadFull:
+    project = _project_or_404(db, project_id, principal)
+
+    if body.name is not None:
+        trimmed = body.name.strip()
+        if not trimmed:
+            raise HTTPException(status_code=422, detail={"code": "invalid_name", "message": "Project name cannot be blank"})
+        project.name = trimmed
+    if body.description is not None:
+        project.description = body.description
+    if body.category is not None:
+        project.category = body.category
+    if body.platform_type is not None:
+        project.platform_type = body.platform_type
+    if body.thumbnail_url is not None:
+        project.thumbnail_url = body.thumbnail_url
+    if body.context_text is not None:
+        project.context_text = body.context_text
+
+    project.updated_at = datetime.now(timezone.utc)
+    _log_activity(
+        db,
+        principal.tenant_id,
+        project.id,
+        "project_updated",
+        f"Project '{project.name}' details updated",
+        project.id,
+        "project",
+    )
+    db.commit()
+    db.refresh(project)
+    return _populate_project_full(project, db)
+
+
+@router.post("/projects/{project_id}/archive", response_model=ProjectReadFull)
+def archive_project(
+    project_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> ProjectReadFull:
+    project = _project_or_404(db, project_id, principal)
+    project.archived_at = datetime.now(timezone.utc)
+    project.updated_at = datetime.now(timezone.utc)
+    _log_activity(
+        db,
+        principal.tenant_id,
+        project.id,
+        "project_archived",
+        f"Project '{project.name}' moved to archive",
+        project.id,
+        "project",
+    )
+    db.commit()
+    db.refresh(project)
+    return _populate_project_full(project, db)
+
+
+@router.post("/projects/{project_id}/restore", response_model=ProjectReadFull)
+def restore_project(
+    project_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> ProjectReadFull:
+    project = _project_or_404(db, project_id, principal)
+    project.archived_at = None
+    project.updated_at = datetime.now(timezone.utc)
+    _log_activity(
+        db,
+        principal.tenant_id,
+        project.id,
+        "project_restored",
+        f"Project '{project.name}' restored from archive",
+        project.id,
+        "project",
+    )
+    db.commit()
+    db.refresh(project)
+    return _populate_project_full(project, db)
+
+
+@router.delete("/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_project(
+    project_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> Response:
+    project = _project_or_404(db, project_id, principal)
+    project.deleted_at = datetime.now(timezone.utc)
+    project.updated_at = datetime.now(timezone.utc)
+    _log_activity(
+        db,
+        principal.tenant_id,
+        project.id,
+        "project_deleted",
+        f"Project '{project.name}' deleted",
+        project.id,
+        "project",
+    )
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/projects/{project_id}/stats", response_model=ProjectReadFull)
+def get_project_stats(
+    project_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> ProjectReadFull:
+    project = _project_or_404(db, project_id, principal)
+    return _populate_project_full(project, db)
+
+
+@router.get("/projects/{project_id}/activity", response_model=list[ProjectActivityEventRead])
+def list_project_activity(
+    project_id: UUID,
+    limit: int = 50,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> list[ProjectActivityEvent]:
+    _project_or_404(db, project_id, principal)
+    return list(
+        db.scalars(
+            select(ProjectActivityEvent)
+            .where(
+                ProjectActivityEvent.project_id == project_id,
+                ProjectActivityEvent.tenant_id == principal.tenant_id,
+            )
+            .order_by(ProjectActivityEvent.created_at.desc())
+            .limit(min(limit, 100))
+        )
+    )
+
+
+@router.get(
+    "/projects/{project_id}/audits/{audit_id}/versions",
+    response_model=list[AnalysisVersionRead],
+)
+def list_audit_versions(
+    project_id: UUID,
+    audit_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> list[AnalysisVersionRead]:
+    _project_or_404(db, project_id, principal)
+    audit = db.scalar(
+        select(Audit).where(
+            Audit.id == audit_id,
+            Audit.project_id == project_id,
+            Audit.tenant_id == principal.tenant_id,
+            Audit.deleted_at.is_(None),
+        )
+    )
+    if audit is None:
+        raise HTTPException(status_code=404, detail={"code": "audit_not_found", "message": "Audit not found"})
+
+    from sqlalchemy import func
+
+    jobs = list(
+        db.scalars(
+            select(AnalysisJob)
+            .where(
+                AnalysisJob.audit_id == audit.id,
+                AnalysisJob.tenant_id == principal.tenant_id,
+            )
+            .order_by(AnalysisJob.created_at.asc())
+        )
+    )
+    results: list[AnalysisVersionRead] = []
+    for idx, job in enumerate(jobs, start=1):
+        count = (
+            db.scalar(
+                select(func.count(Finding.id)).where(Finding.analysis_job_id == job.id)
+            )
+            or 0
+        )
+        results.append(
+            AnalysisVersionRead(
+                job_id=job.id,
+                audit_id=job.audit_id,
+                version_number=idx,
+                status=job.status,
+                provider=job.provider,
+                model=job.model,
+                finding_count=count,
+                summary=job.summary,
+                created_at=job.created_at,
+                completed_at=job.completed_at,
+            )
+        )
+    return results
+
+
+@router.get(
+    "/projects/{project_id}/audits/{audit_id}/versions/compare",
+    response_model=AnalysisComparisonRead,
+)
+def compare_audit_versions(
+    project_id: UUID,
+    audit_id: UUID,
+    earlier_job_id: UUID,
+    later_job_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> AnalysisComparisonRead:
+    _project_or_404(db, project_id, principal)
+    audit = db.scalar(
+        select(Audit).where(
+            Audit.id == audit_id,
+            Audit.project_id == project_id,
+            Audit.tenant_id == principal.tenant_id,
+            Audit.deleted_at.is_(None),
+        )
+    )
+    if audit is None:
+        raise HTTPException(status_code=404, detail={"code": "audit_not_found", "message": "Audit not found"})
+
+    earlier_job = db.get(AnalysisJob, earlier_job_id)
+    later_job = db.get(AnalysisJob, later_job_id)
+
+    if not earlier_job or not later_job:
+        raise HTTPException(status_code=404, detail={"code": "job_not_found", "message": "One or both analysis jobs not found"})
+
+    if earlier_job.tenant_id != principal.tenant_id or later_job.tenant_id != principal.tenant_id:
+        raise HTTPException(status_code=404, detail={"code": "job_not_found", "message": "One or both analysis jobs not found"})
+
+    if earlier_job.audit_id != audit.id or later_job.audit_id != audit.id:
+        raise HTTPException(status_code=400, detail={"code": "cross_audit_comparison", "message": "Cannot compare analysis jobs from different audits"})
+
+    earlier_findings = list(db.scalars(select(Finding).where(Finding.analysis_job_id == earlier_job.id)))
+    later_findings = list(db.scalars(select(Finding).where(Finding.analysis_job_id == later_job.id)))
+
+    earlier_reads = _populate_finding_reads(earlier_findings, db)
+    later_reads = _populate_finding_reads(later_findings, db)
+
+    def finding_key(f: FindingRead) -> str:
+        return f"{f.category.lower().strip()}:{f.title.lower().strip()}"
+
+    earlier_map = {finding_key(f): f for f in earlier_reads}
+    later_map = {finding_key(f): f for f in later_reads}
+
+    persistent: list[FindingRead] = []
+    changed_severity: list[FindingRead] = []
+    resolved: list[FindingRead] = []
+    new_f: list[FindingRead] = []
+
+    for k, lf in later_map.items():
+        if k in earlier_map:
+            ef = earlier_map[k]
+            if lf.severity != ef.severity:
+                changed_severity.append(lf)
+            else:
+                persistent.append(lf)
+        else:
+            new_f.append(lf)
+
+    for k, ef in earlier_map.items():
+        if k not in later_map:
+            resolved.append(ef)
+
+    comparison_type = "multi_screen" if audit.mode == "multi" else "single_screen"
+    limitations = [
+        "Finding equivalence is based on title and category heuristic matching.",
+        "A finding marked 'resolved' may indicate the vision model did not detect it in this run rather than a verified fix.",
+        "Changes in bounding box coordinates or wording are not classified as severity changes.",
+    ]
+
+    return AnalysisComparisonRead(
+        earlier_job_id=earlier_job.id,
+        later_job_id=later_job.id,
+        audit_id=audit.id,
+        comparison_type=comparison_type,
+        new_findings=new_f,
+        resolved_findings=resolved,
+        persistent_findings=persistent,
+        changed_severity_findings=changed_severity,
+        earlier_finding_count=len(earlier_reads),
+        later_finding_count=len(later_reads),
+        limitations=limitations,
+    )
+
+
+@router.post(
+    "/projects/{project_id}/exports",
+    response_model=ExportJobRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_project_export(
+    project_id: UUID,
+    body: ExportJobCreate,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> ExportJobRead:
+    project = _project_or_404(db, project_id, principal)
+
+    audit: Audit | None = None
+    if body.export_type in ("single_audit", "multi_audit") and not body.audit_id:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "missing_audit_id", "message": "audit_id is required for audit exports"},
+        )
+
+    if body.audit_id is not None:
+        audit = db.scalar(
+            select(Audit).where(
+                Audit.id == body.audit_id,
+                Audit.project_id == project.id,
+                Audit.tenant_id == principal.tenant_id,
+                Audit.deleted_at.is_(None),
+            )
+        )
+        if audit is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "audit_not_found", "message": "Audit not found for this export"},
+            )
+
+    job = ExportJob(
+        tenant_id=principal.tenant_id,
+        project_id=project.id,
+        audit_id=body.audit_id,
+        created_by=principal.id,
+        export_type=body.export_type,
+        format=body.format,
+        status="pending",
+    )
+    db.add(job)
+    db.flush()
+
+    try:
+        content, _, _ = generate_export_content(db, job, project, audit)
+        job.file_content = content
+        job.file_size = len(content.encode("utf-8"))
+        job.status = "completed"
+        job.completed_at = datetime.now(timezone.utc)
+        _log_activity(
+            db,
+            principal.tenant_id,
+            project.id,
+            "export_generated",
+            f"Export generated: {body.export_type} ({body.format})",
+            job.id,
+            "export",
+        )
+        db.commit()
+        db.refresh(job)
+    except Exception as error:
+        db.rollback()
+        job.status = "failed"
+        job.error_message = str(error)
+        job.completed_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(job)
+
+    read = ExportJobRead.model_validate(job)
+    read.download_available = job.status == "completed" and bool(job.file_content)
+    return read
+
+
+@router.get("/projects/{project_id}/exports", response_model=list[ExportJobRead])
+def list_project_exports(
+    project_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> list[ExportJobRead]:
+    _project_or_404(db, project_id, principal)
+    jobs = list(
+        db.scalars(
+            select(ExportJob)
+            .where(
+                ExportJob.project_id == project_id,
+                ExportJob.tenant_id == principal.tenant_id,
+            )
+            .order_by(ExportJob.created_at.desc())
+        )
+    )
+    results: list[ExportJobRead] = []
+    for j in jobs:
+        read = ExportJobRead.model_validate(j)
+        read.download_available = j.status == "completed" and bool(j.file_content)
+        results.append(read)
+    return results
+
+
+@router.get("/projects/{project_id}/exports/{export_id}", response_model=ExportJobRead)
+def get_project_export(
+    project_id: UUID,
+    export_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> ExportJobRead:
+    _project_or_404(db, project_id, principal)
+    job = db.scalar(
+        select(ExportJob).where(
+            ExportJob.id == export_id,
+            ExportJob.project_id == project_id,
+            ExportJob.tenant_id == principal.tenant_id,
+        )
+    )
+    if job is None:
+        raise HTTPException(status_code=404, detail={"code": "export_not_found", "message": "Export job not found"})
+    read = ExportJobRead.model_validate(job)
+    read.download_available = job.status == "completed" and bool(job.file_content)
+    return read
+
+
+@router.get("/projects/{project_id}/exports/{export_id}/download")
+def download_project_export(
+    project_id: UUID,
+    export_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> Response:
+    project = _project_or_404(db, project_id, principal)
+    job = db.scalar(
+        select(ExportJob).where(
+            ExportJob.id == export_id,
+            ExportJob.project_id == project_id,
+            ExportJob.tenant_id == principal.tenant_id,
+        )
+    )
+    if job is None or job.status != "completed" or not job.file_content:
+        raise HTTPException(status_code=404, detail={"code": "export_not_found", "message": "Export not ready or not found"})
+
+    safe_title = "".join(c if c.isalnum() else "_" for c in project.name)[:30]
+    ext_map = {"json": "json", "markdown": "md", "csv": "csv", "zip": "json"}
+    ext = ext_map.get(job.format, "txt")
+    media_map = {
+        "json": "application/json",
+        "markdown": "text/markdown; charset=utf-8",
+        "csv": "text/csv; charset=utf-8",
+        "zip": "application/json",
+    }
+    media_type = media_map.get(job.format, "text/plain")
+    filename = f"{job.export_type}_{safe_title}_{job.id}.{ext}"
+
+    return Response(
+        content=job.file_content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
 
 

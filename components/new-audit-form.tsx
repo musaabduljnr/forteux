@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { useSession } from "next-auth/react";
+import { createClient } from "@/lib/supabase/client";
 import { useAppState } from "./app-state";
 import { Icon } from "./icons";
 import { Badge, Button } from "./ui";
@@ -31,7 +31,7 @@ function makeScreen(file: File): UploadedScreen {
 
 export function NewAuditForm() {
   const router = useRouter();
-  const { status: sessionStatus } = useSession();
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const { projects, selectedProjectId, setSelectedProjectId, createAudit, notify } = useAppState();
   const [mode, setMode] = useState<AuditMode>("single");
   const [screens, setScreens] = useState<UploadedScreen[]>([]);
@@ -49,6 +49,8 @@ export function NewAuditForm() {
   useEffect(() => {
     const savedMode = window.localStorage.getItem("forteux-default-audit-mode");
     if (savedMode === "single" || savedMode === "multi") setMode(savedMode);
+    const supabase = createClient();
+    supabase.auth.getUser().then(({ data }) => setIsAuthenticated(Boolean(data.user)));
   }, []);
 
   function receiveFiles(files: FileList | File[]) {
@@ -129,7 +131,7 @@ export function NewAuditForm() {
 
     setSubmitting(true);
     try {
-      if (sessionStatus === "authenticated") {
+      if (isAuthenticated) {
         try {
           // 1. Create audit in backend
           const auditRes = await fetch(`/api/backend/projects/${projectId}/audits`, {
@@ -334,7 +336,7 @@ export function NewAuditForm() {
           <Link className="inline-link" href="/audits/demo">Explore the illustrative workspace <Icon name="arrow" size={15} /></Link>
         </div>
         <Button type="submit" className="start-audit-button" icon="arrow" disabled={!canStart}>
-          {submitting ? "Uploading screenshot..." : sessionStatus === "authenticated" ? "Upload & create audit" : "Create demo audit"}
+          {submitting ? "Uploading screenshot..." : isAuthenticated ? "Upload & create audit" : "Create demo audit"}
         </Button>
         <span className="start-audit-caption">{mode === "multi" && screens.length < 2 ? "Add at least two screens to continue." : screens.length === 0 ? "Add a screenshot to continue." : "Frontend-only demonstration. No AI analysis will run."}</span>
       </aside>

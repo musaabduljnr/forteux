@@ -65,6 +65,8 @@ def verify_access_token(token: str) -> dict[str, Any]:
         # Check unverified header/claims to distinguish development tokens from OIDC tokens
         unverified = jwt.decode(token, options={"verify_signature": False, "verify_exp": False})
         token_iss = unverified.get("iss")
+        token_aud = unverified.get("aud")
+
         if token_iss == DEV_AUTH_ISSUER:
             if settings.app_env == "production" or not settings.dev_auth_enabled:
                 raise jwt.InvalidTokenError("Development authentication is not permitted")
@@ -79,6 +81,44 @@ def verify_access_token(token: str) -> dict[str, Any]:
             if claims.get("token_use") != "access" or claims.get("client_id") != DEV_AUTH_CLIENT_ID:
                 raise jwt.InvalidTokenError("Token is not an access token for development client")
             return claims
+
+        # Check for Supabase JWT (HS256 with JWT secret or RS256/ES256 with JWKS)
+        is_supabase_token = (
+            (token_iss and "supabase.co" in token_iss)
+            or token_aud == "authenticated"
+            or (settings.supabase_url and token_iss and settings.supabase_url in token_iss)
+        )
+        if is_supabase_token:
+            if settings.supabase_jwt_secret:
+                try:
+                    claims = jwt.decode(
+                        token,
+                        settings.supabase_jwt_secret,
+                        algorithms=["HS256"],
+                        options={"verify_aud": False, "require": ["exp", "iat", "sub"]},
+                    )
+                    user_meta = claims.get("user_metadata") or {}
+                    if not claims.get("name") and user_meta.get("full_name"):
+                        claims["name"] = user_meta["full_name"]
+                    return claims
+                except jwt.InvalidSignatureError:
+                    # Might be signed with asymmetric key
+                    pass
+
+            if token_iss:
+                jwks_url = f"{token_iss.rstrip('/')}/.well-known/jwks.json"
+                signing_key = _jwks_client(jwks_url).get_signing_key_from_jwt(token)
+                claims = jwt.decode(
+                    token,
+                    signing_key.key,
+                    algorithms=["RS256", "ES256"],
+                    issuer=token_iss,
+                    options={"verify_aud": False, "require": ["exp", "iat", "sub", "iss"]},
+                )
+                user_meta = claims.get("user_metadata") or {}
+                if not claims.get("name") and user_meta.get("full_name"):
+                    claims["name"] = user_meta["full_name"]
+                return claims
 
         issuer, client_id, jwks_url = settings.require_oidc()
         signing_key = _jwks_client(jwks_url).get_signing_key_from_jwt(token)

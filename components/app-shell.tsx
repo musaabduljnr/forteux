@@ -1,52 +1,98 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useState, type ReactNode } from "react";
-import { signIn, signOut, useSession } from "next-auth/react";
+import { usePathname, useRouter } from "next/navigation";
+import { useState, useEffect, type ReactNode } from "react";
+import type { User } from "@supabase/supabase-js";
+import { createClient } from "@/lib/supabase/client";
 import { useAppState } from "./app-state";
 import { Icon, type IconName } from "./icons";
 
 const navigation: Array<{ label: string; href: string; icon: IconName; group: string }> = [
-  { label: "Dashboard", href: "/", icon: "dashboard", group: "Workspace" },
+  { label: "Dashboard", href: "/dashboard", icon: "dashboard", group: "Workspace" },
   { label: "New audit", href: "/audits/new", icon: "plus", group: "Workspace" },
   { label: "Projects", href: "/projects", icon: "folder", group: "Workspace" },
   { label: "Audit history", href: "/history", icon: "history", group: "Workspace" },
+  { label: "Exports", href: "/exports", icon: "file", group: "Workspace" },
   { label: "Knowledge library", href: "/knowledge", icon: "book", group: "Manage" },
   { label: "Design system", href: "/design-system", icon: "layers", group: "Manage" },
   { label: "Settings", href: "/settings", icon: "settings", group: "Manage" },
 ];
 
 function isActive(pathname: string, href: string) {
-  if (href === "/") return pathname === "/";
+  if (href === "/dashboard") return pathname === "/dashboard";
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [supabaseUser, setSupabaseUser] = useState<User | null>(null);
   const { toasts, dismissToast, notify, user } = useAppState();
-  const { data: session, status: sessionStatus } = useSession();
-  const authEnabled = process.env.NEXT_PUBLIC_OIDC_ENABLED === "true";
-  const devAuthEnabled = process.env.NEXT_PUBLIC_DEV_AUTH_ENABLED === "true";
-  const profileName = session?.user?.name || session?.user?.email || user.displayName;
-  const profileInitials = profileName.trim().split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase() ?? "").join("");
+
+  const supabase = createClient();
+
+  // Listen for Supabase auth state
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => setSupabaseUser(data.user ?? null));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSupabaseUser(session?.user ?? null);
+    });
+    return () => subscription.unsubscribe();
+  }, [supabase.auth]);
+
+  async function handleSignOut() {
+    await supabase.auth.signOut();
+    setProfileOpen(false);
+    router.push("/login");
+    router.refresh();
+  }
+
+  const profileName =
+    supabaseUser?.user_metadata?.full_name ||
+    supabaseUser?.user_metadata?.name ||
+    supabaseUser?.email ||
+    user.displayName;
+  const profileInitials = profileName
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part: string) => part[0]?.toUpperCase() ?? "")
+    .join("");
   const isWorkspace = pathname.startsWith("/audits/");
+
+  if (pathname === "/") {
+    return (
+      <div className="public-landing-container">
+        {children}
+        <div className="toast-region" aria-live="polite" aria-relevant="additions removals">
+          {toasts.map((toast) => (
+            <div className={`toast toast-${toast.tone}`} role={toast.tone === "error" ? "alert" : "status"} key={toast.id}>
+              <Icon name={toast.tone === "success" ? "check" : toast.tone === "error" ? "warning" : "info"} size={18} />
+              <span>{toast.message}</span>
+              <button aria-label="Dismiss notification" onClick={() => dismissToast(toast.id)}><Icon name="close" size={16} /></button>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`app-shell ${collapsed ? "sidebar-collapsed" : ""} ${mobileOpen ? "mobile-menu-open" : ""} ${isWorkspace ? "workspace-route" : ""}`}>
       <button className="mobile-backdrop" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />
       <aside className="sidebar">
-        <Link className="brand" href="/" onClick={() => setMobileOpen(false)} aria-label="Forteux home">
+        <Link className="brand" href="/dashboard" onClick={() => setMobileOpen(false)} aria-label="Forteux home">
           <span className="brand-mark"><Icon name="layers" size={20} /></span>
           <span className="brand-copy"><strong>forteux</strong><small>Design intelligence</small></span>
         </Link>
         <button className="workspace-switcher" onClick={() => notify("Workspace switching will be connected to team accounts later.", "info")}>
-          <span className="workspace-avatar">N</span>
-          <span className="workspace-copy"><strong>Northstar Studio</strong><small>Personal workspace</small></span>
+          <span className="workspace-avatar">{profileInitials?.[0] || "W"}</span>
+          <span className="workspace-copy"><strong>{supabaseUser ? (profileName.split(" ")[0] + "'s workspace") : "Personal workspace"}</strong><small>Personal workspace</small></span>
           <Icon name="down" size={16} />
         </button>
         <nav className="primary-nav" aria-label="Main navigation">
@@ -79,8 +125,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             <button aria-label="Open getting started guide" onClick={() => notify("The getting started guide will be available in a later release.")}><Icon name="arrow" size={16} /></button>
           </div>
           <div className="sidebar-user">
-            <span className="user-avatar">{user.avatarInitials}</span>
-            <div className="user-copy"><strong>{user.displayName}</strong><small>{user.role}</small></div>
+            <span className="user-avatar">{supabaseUser ? (profileInitials || "U") : user.avatarInitials}</span>
+            <div className="user-copy"><strong>{supabaseUser ? profileName : user.displayName}</strong><small>{supabaseUser ? (supabaseUser.email || "User") : user.role}</small></div>
             <button className="icon-button sidebar-collapse-button" onClick={() => setCollapsed(!collapsed)} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}><Icon name="move" size={17} /></button>
           </div>
         </div>
@@ -99,24 +145,18 @@ export function AppShell({ children }: { children: ReactNode }) {
             </button>
             {notificationsOpen && <div className="topbar-popover notification-popover"><strong>You’re all caught up</strong><p>New audit and document updates will appear here.</p></div>}
             <button className="topbar-profile" aria-expanded={profileOpen} onClick={() => { setProfileOpen(!profileOpen); setNotificationsOpen(false); }}>
-              <span className="user-avatar user-avatar-small">{session ? profileInitials || user.avatarInitials : user.avatarInitials}</span><span className="profile-name">{session ? profileName : user.displayName}</span><Icon name="down" size={15} />
+              <span className="user-avatar user-avatar-small">{supabaseUser ? (profileInitials || "U") : user.avatarInitials}</span><span className="profile-name">{supabaseUser ? profileName : user.displayName}</span><Icon name="down" size={15} />
             </button>
             {profileOpen && (
               <div className="topbar-popover profile-popover">
-                <strong>{session ? profileName : user.displayName}</strong><span>{session ? "Authenticated account" : "Demo profile · not authenticated"}</span>
+                <strong>{supabaseUser ? profileName : user.displayName}</strong><span>{supabaseUser ? "Authenticated account" : "Demo profile · not authenticated"}</span>
                 <Link href="/settings" onClick={() => setProfileOpen(false)}>Profile settings</Link>
-                {session ? (
-                  <button onClick={() => { setProfileOpen(false); void signOut({ callbackUrl: "/" }); }}>Sign out</button>
-                ) : authEnabled ? (
-                  <button disabled={sessionStatus === "loading"} onClick={() => { setProfileOpen(false); void signIn("cognito"); }}>
-                    Sign in with Cognito
-                  </button>
-                ) : devAuthEnabled ? (
-                  <button disabled={sessionStatus === "loading"} onClick={() => { setProfileOpen(false); void signIn("development", { callbackUrl: "/" }); }}>
-                    Sign in with Dev Account
-                  </button>
+                {supabaseUser ? (
+                  <button onClick={() => void handleSignOut()}>Sign out</button>
                 ) : (
-                  <span className="profile-auth-note">Authentication is unavailable until configured.</span>
+                  <Link href="/login" className="button button-sm button-secondary" onClick={() => setProfileOpen(false)}>
+                    Sign in
+                  </Link>
                 )}
               </div>
             )}

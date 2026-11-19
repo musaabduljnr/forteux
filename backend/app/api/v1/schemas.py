@@ -16,6 +16,10 @@ class UserRead(BaseModel):
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=4000)
+    category: str | None = Field(default=None, max_length=100)
+    platform_type: str | None = Field(default=None, max_length=100)
+    thumbnail_url: str | None = Field(default=None, max_length=900)
+    context_text: str | None = Field(default=None, max_length=4000)
 
     @field_validator("name")
     @classmethod
@@ -30,6 +34,11 @@ class ProjectRead(BaseModel):
     id: UUID
     name: str
     description: str | None
+    category: str | None = None
+    platform_type: str | None = None
+    thumbnail_url: str | None = None
+    context_text: str | None = None
+    archived_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -557,5 +566,109 @@ class DesignSystemPromptResponse(BaseModel):
     tokens_included: int
     issues_addressed: int
     screens_referenced: int
+
+
+# ---------------------------------------------------------------------------
+# Phase 09: Project Management, Versioning & Export Schemas
+# ---------------------------------------------------------------------------
+
+
+class ProjectUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=4000)
+    category: str | None = Field(default=None, max_length=100)
+    platform_type: str | None = Field(default=None, max_length=100)
+    thumbnail_url: str | None = Field(default=None, max_length=900)
+    context_text: str | None = Field(default=None, max_length=4000)
+
+
+class ProjectReadFull(BaseModel):
+    id: UUID
+    name: str
+    description: str | None
+    category: str | None = None
+    platform_type: str | None = None
+    thumbnail_url: str | None = None
+    context_text: str | None = None
+    archived_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+    audit_count: int = 0
+    screen_count: int = 0
+    design_system_count: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ProjectActivityEventRead(BaseModel):
+    id: UUID
+    project_id: UUID
+    event_type: str
+    resource_id: UUID | None = None
+    resource_type: str | None = None
+    description: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ExportJobCreate(BaseModel):
+    export_type: Literal["single_audit", "multi_audit", "design_system", "stitch_prompt", "project_package"]
+    format: Literal["json", "markdown", "csv", "zip"]
+    audit_id: UUID | None = None
+
+
+class ExportJobRead(BaseModel):
+    id: UUID
+    project_id: UUID
+    audit_id: UUID | None = None
+    export_type: str
+    format: str
+    status: str
+    file_size: int | None = None
+    error_message: str | None = None
+    expires_at: datetime | None = None
+    created_at: datetime
+    completed_at: datetime | None = None
+    download_available: bool = False
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AnalysisVersionRead(BaseModel):
+    job_id: UUID
+    audit_id: UUID
+    version_number: int
+    status: str
+    provider: str
+    model: str
+    finding_count: int
+    summary: str | None = None
+    created_at: datetime
+    completed_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AnalysisComparisonRead(BaseModel):
+    earlier_job_id: UUID
+    later_job_id: UUID
+    audit_id: UUID
+    comparison_type: str  # single_screen | multi_screen
+    new_findings: list[FindingRead] = Field(default_factory=list)
+    resolved_findings: list[FindingRead] = Field(default_factory=list)
+    persistent_findings: list[FindingRead] = Field(default_factory=list)
+    changed_severity_findings: list[FindingRead] = Field(default_factory=list)
+    earlier_finding_count: int = 0
+    later_finding_count: int = 0
+    limitations: list[str] = Field(default_factory=list)
+
+
+class PaginatedAuditsResponse(BaseModel):
+    items: list[AuditRead]
+    total: int
+    page: int
+    page_size: int
+
 
 

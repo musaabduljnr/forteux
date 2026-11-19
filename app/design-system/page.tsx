@@ -5,11 +5,7 @@ import { useAppState } from "@/components/app-state";
 import { Icon } from "@/components/icons";
 import { Badge, Button, EmptyState, PageHeader, SectionTitle, SeverityBadge } from "@/components/ui";
 import type {
-  ComponentPattern,
-  DesignConsistencyIssue,
   DesignSystemReport,
-  ExtractedColor,
-  ExtractedTypography,
   ProposedDesignToken,
 } from "@/lib/types";
 
@@ -624,7 +620,7 @@ export default function DesignSystemPage() {
                   <tbody>
                     {filteredTokens.map((tok, idx) => (
                       <tr key={idx} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                        <td style={{ padding: "8px 14px", fontFamily: "monospace", fontWeight: 600, color: "#1e293b" }}>
+                        <td style={{ padding: "8px 14px", fontFamily: "var(--font-mono)", fontSize: "12px", fontWeight: 600, color: "#1e293b" }}>
                           {tok.name}
                         </td>
                         <td style={{ padding: "8px 14px" }}>
@@ -686,7 +682,7 @@ export default function DesignSystemPage() {
               style={{
                 width: "100%",
                 height: "360px",
-                fontFamily: "monospace",
+                fontFamily: "var(--font-mono)",
                 fontSize: "12px",
                 padding: "10px",
                 borderRadius: "6px",
@@ -754,7 +750,7 @@ export default function DesignSystemPage() {
               style={{
                 width: "100%",
                 height: "350px",
-                fontFamily: "monospace",
+                fontFamily: "var(--font-mono)",
                 fontSize: "12px",
                 padding: "10px",
                 borderRadius: "6px",

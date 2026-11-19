@@ -360,4 +360,87 @@ export interface DesignSystemExportCss {
   token_count: number;
 }
 
+// Phase 09 — Project Management & Export Types
 
+export interface ProjectFull {
+  id: string;
+  name: string;
+  description: string | null;
+  category: string | null;
+  platform_type: string | null;
+  context_text: string | null;
+  archived_at: string | null;
+  created_at: string;
+  updated_at: string;
+  audit_count: number;
+  screen_count: number;
+  design_system_count: number;
+}
+
+export interface ActivityEvent {
+  id: string;
+  project_id: string;
+  event_type: string;
+  resource_id: string | null;
+  resource_type: string | null;
+  description: string;
+  created_at: string;
+}
+
+export interface ExportJob {
+  id: string;
+  project_id: string;
+  audit_id: string | null;
+  export_type: string;
+  format: string;
+  status: 'pending' | 'generating' | 'completed' | 'failed';
+  file_size: number | null;
+  error_message: string | null;
+  expires_at: string | null;
+  created_at: string;
+  completed_at: string | null;
+  download_available: boolean;
+}
+
+export interface AnalysisVersion {
+  job_id: string;
+  audit_id: string;
+  version_number: number;
+  status: string;
+  provider: string;
+  model: string;
+  finding_count: number;
+  summary: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface AnalysisComparison {
+  earlier_job_id: string;
+  later_job_id: string;
+  audit_id: string;
+  comparison_type: string;
+  new_findings: unknown[];
+  resolved_findings: unknown[];
+  persistent_findings: unknown[];
+  changed_severity_findings: unknown[];
+  earlier_finding_count: number;
+  later_finding_count: number;
+  limitations: string[];
+}
+
+export interface PaginatedAudits {
+  items: AuditRead[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface AuditRead {
+  id: string;
+  project_id: string;
+  name: string;
+  mode: 'single' | 'multi';
+  status: string;
+  created_at: string;
+}

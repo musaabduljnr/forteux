@@ -1,0 +1,67 @@
+name: Forteux CI Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  frontend-validation:
+    name: Frontend Lint, Typecheck & Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Lint codebase
+        run: npm run lint
+
+      - name: Typecheck TypeScript
+        run: npm run typecheck
+
+      - name: Build Next.js application
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://mock-ci-project.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: mock-ci-anon-key
+          NEXTAUTH_SECRET: ci-temporary-secret-key-32bytes-min
+        run: npm run build
+
+  backend-validation:
+    name: Backend Pytest & Migration Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install backend dependencies
+        run: |
+          cd backend
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run Pytest test suite
+        env:
+          APP_ENV: test
+          DEV_AUTH_ENABLED: "true"
+          DEV_AUTH_SECRET: ci-dev-secret-key-32bytes-minimum
+          AWS_REGION: us-east-1
+          S3_BUCKET: ci-test-bucket
+        run: |
+          cd backend
+          pytest tests/ -v

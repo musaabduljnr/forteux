@@ -1,5 +1,6 @@
 import { getToken } from "next-auth/jwt";
 import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,14 +26,37 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
     return NextResponse.json({ error: { code: "backend_transport_invalid", message: "Backend API must use HTTPS" } }, { status: 503 });
   }
 
-  const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET });
-  const accessToken = token?.apiAccessToken;
+  // 1. Try Supabase session token first
+  let accessToken: string | undefined;
+  try {
+    const supabase = await createClient();
+    const { data } = await supabase.auth.getSession();
+    accessToken = data.session?.access_token;
+  } catch {
+    // If Supabase not yet configured or error, fall through
+  }
+
+  // 2. Check Authorization header
+  if (!accessToken) {
+    const authHeader = request.headers.get("authorization");
+    if (authHeader?.startsWith("Bearer ")) {
+      accessToken = authHeader.substring(7);
+    }
+  }
+
+  // 3. Fallback to NextAuth token for dev/backwards compatibility
+  let nextAuthToken: Awaited<ReturnType<typeof getToken>> = null;
+  if (!accessToken) {
+    nextAuthToken = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET });
+    accessToken = nextAuthToken?.apiAccessToken as string | undefined;
+  }
+
   if (typeof accessToken !== "string" || !accessToken) {
     return NextResponse.json({ error: { code: "authentication_required", message: "Sign in is required" } }, { status: 401 });
   }
   if (
-    typeof token?.apiAccessTokenExpiresAt === "number"
-    && token.apiAccessTokenExpiresAt <= Math.floor(Date.now() / 1000)
+    typeof nextAuthToken?.apiAccessTokenExpiresAt === "number"
+    && nextAuthToken.apiAccessTokenExpiresAt <= Math.floor(Date.now() / 1000)
   ) {
     return NextResponse.json({ error: { code: "session_expired", message: "Sign in again to continue" } }, { status: 401 });
   }

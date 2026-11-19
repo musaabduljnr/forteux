@@ -83,6 +83,13 @@ class Project(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # Phase 09 additions
+    category: Mapped[str | None] = mapped_column(String(100))
+    platform_type: Mapped[str | None] = mapped_column(String(100))
+    thumbnail_url: Mapped[str | None] = mapped_column(String(900))
+    context_text: Mapped[str | None] = mapped_column(Text)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
 
 class Audit(Base):
     __tablename__ = "audits"
@@ -106,6 +113,11 @@ class Audit(Base):
     mode: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(24), default="draft", nullable=False)
     context_json: Mapped[str | None] = mapped_column(Text)
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    parent_job_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("analysis_jobs.id", ondelete="SET NULL", use_alter=True, name="fk_audit_parent_job"),
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -516,3 +528,90 @@ class DesignSystemAnalysis(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ProjectActivityEvent(Base):
+    __tablename__ = "project_activity_events"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["tenants.id"],
+            ondelete="RESTRICT",
+            name="fk_activity_tenant",
+        ),
+        ForeignKeyConstraint(
+            ["project_id"],
+            ["projects.id"],
+            ondelete="CASCADE",
+            name="fk_activity_project",
+        ),
+        Index("ix_project_activity_events_tenant_project_created", "tenant_id", "project_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    resource_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    resource_type: Mapped[str | None] = mapped_column(String(80))
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class ExportJob(Base):
+    __tablename__ = "export_jobs"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["tenants.id"],
+            ondelete="RESTRICT",
+            name="fk_export_tenant",
+        ),
+        ForeignKeyConstraint(
+            ["project_id"],
+            ["projects.id"],
+            ondelete="CASCADE",
+            name="fk_export_project",
+        ),
+        ForeignKeyConstraint(
+            ["audit_id"],
+            ["audits.id"],
+            ondelete="SET NULL",
+            name="fk_export_audit",
+        ),
+        ForeignKeyConstraint(
+            ["created_by"],
+            ["users.id"],
+            ondelete="RESTRICT",
+            name="fk_export_user",
+        ),
+        Index("ix_export_jobs_tenant_project_created", "tenant_id", "project_id", "created_at"),
+        CheckConstraint(
+            "export_type IN ('single_audit', 'multi_audit', 'design_system', 'stitch_prompt', 'project_package')",
+            name="ck_export_job_type",
+        ),
+        CheckConstraint(
+            "format IN ('json', 'markdown', 'csv', 'zip')",
+            name="ck_export_job_format",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'generating', 'completed', 'failed')",
+            name="ck_export_job_status",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    audit_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    created_by: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    export_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    format: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="pending", nullable=False)
+    file_content: Mapped[str | None] = mapped_column(Text)
+    file_size: Mapped[int | None] = mapped_column(Integer)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
