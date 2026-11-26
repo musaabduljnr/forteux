@@ -89,7 +89,8 @@ def verify_access_token(token: str) -> dict[str, Any]:
             or (settings.supabase_url and token_iss and settings.supabase_url in token_iss)
         )
         if is_supabase_token:
-            if settings.supabase_jwt_secret:
+            token_alg = jwt.get_unverified_header(token).get("alg")
+            if settings.supabase_jwt_secret and token_alg == "HS256":
                 try:
                     claims = jwt.decode(
                         token,
@@ -101,7 +102,7 @@ def verify_access_token(token: str) -> dict[str, Any]:
                     if not claims.get("name") and user_meta.get("full_name"):
                         claims["name"] = user_meta["full_name"]
                     return claims
-                except jwt.InvalidSignatureError:
+                except (jwt.InvalidSignatureError, jwt.InvalidAlgorithmError):
                     # Might be signed with asymmetric key
                     pass
 

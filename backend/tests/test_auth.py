@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import jwt
 import pytest
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from fastapi import HTTPException
 
 from app.core import auth
@@ -84,3 +84,40 @@ def test_verified_identity_creates_user_and_personal_tenant(client, db_session, 
     assert db_session.query(User).count() == 1
     assert db_session.query(Tenant).count() == 1
     assert db_session.query(Membership).count() == 1
+
+
+def test_verifies_supabase_es256_token_even_when_jwt_secret_configured(monkeypatch):
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    issuer = "https://edlkpfrlsrgslcdwjykv.supabase.co/auth/v1"
+    settings = Settings(
+        app_env="test",
+        supabase_url="https://edlkpfrlsrgslcdwjykv.supabase.co",
+        supabase_jwt_secret="some-hs256-secret-configured-in-env",
+    )
+    monkeypatch.setattr(auth, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        auth,
+        "_jwks_client",
+        lambda _url: SimpleNamespace(
+            get_signing_key_from_jwt=lambda _token: SimpleNamespace(key=private_key.public_key())
+        ),
+    )
+
+    now = datetime.now(timezone.utc)
+    token = jwt.encode(
+        {
+            "iss": issuer,
+            "sub": "user-uuid-123",
+            "aud": "authenticated",
+            "iat": now,
+            "exp": now + timedelta(minutes=5),
+            "email": "musa@example.com",
+            "user_metadata": {"full_name": "Musa Abubakar"},
+        },
+        private_key,
+        algorithm="ES256",
+    )
+
+    claims = auth.verify_access_token(token)
+    assert claims["sub"] == "user-uuid-123"
+    assert claims["name"] == "Musa Abubakar"
