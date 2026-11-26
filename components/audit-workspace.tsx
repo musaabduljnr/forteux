@@ -208,6 +208,8 @@ function ScreenshotViewer({
   screenId,
   screenName,
   previewUrl,
+  widthPx,
+  heightPx,
   issues,
   selectedIssueIds,
   activeIssueId,
@@ -217,18 +219,22 @@ function ScreenshotViewer({
   screenId: string;
   screenName: string;
   previewUrl?: string;
+  widthPx?: number;
+  heightPx?: number;
   issues: DetectedIssue[];
   selectedIssueIds: string[];
   activeIssueId: string | null;
   onSelectIssue: (id: string) => void;
 }) {
   const [zoom, setZoom] = useState(100);
+  const aspectRatioStyle = widthPx && heightPx ? { aspectRatio: `${widthPx} / ${heightPx}` } : { aspectRatio: "auto" };
   return (
     <div className="screenshot-stage">
       {previewUrl ? (
         <div className="screenshot-scroll">
-          <div className="screenshot-image-wrap" style={{ width: `${zoom}%` }}>
-            <Image src={previewUrl} alt={`${screenName} screenshot`} fill sizes="(max-width: 1200px) 100vw, 65vw" unoptimized priority />
+          <div className="screenshot-image-wrap" style={{ width: `${zoom}%`, ...aspectRatioStyle }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={previewUrl} alt={`${screenName} screenshot`} style={{ width: "100%", height: "auto", display: "block" }} />
             {issues.flatMap((issue) => issue.boundingBoxes.filter((annotation) => annotation.screenId === screenId).map(({ box }, bIdx) => {
               const isSelected = selectedIssueIds.includes(issue.id);
               return (
@@ -320,6 +326,7 @@ export function AuditWorkspace({ auditId }: { auditId: string }) {
   const [draggedScreen, setDraggedScreen] = useState<number | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const promptDialogRef = useRef<HTMLElement | null>(null);
+  const hydratedAuditIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!promptOpen) return;
@@ -335,6 +342,76 @@ export function AuditWorkspace({ auditId }: { auditId: string }) {
     setSelectedScreenId((current) => audit.screens.some((screen) => screen.id === current) ? current : audit.screens[0]?.id ?? "");
     // Default selection: select all findings
     setSelectedIssues(audit.issues.map((issue) => issue.id));
+
+    // Hydrate screen download URLs & persisted findings from backend once per auditId
+    if (!audit.isDemo && audit.projectId && hydratedAuditIdRef.current !== audit.id) {
+      hydratedAuditIdRef.current = audit.id;
+      fetch(`/api/backend/projects/${audit.projectId}/audits/${audit.id}/screens`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((backendScreens: Array<{ id: string; screen_asset_id: string; screen_label?: string | null; width_px?: number | null; height_px?: number | null; download_url?: string | null }> | null) => {
+          if (!Array.isArray(backendScreens) || backendScreens.length === 0) return;
+          const mappedScreens = backendScreens.map((bs, idx) => {
+            const existing = audit.screens[idx];
+            return {
+              id: bs.id,
+              name: bs.screen_label || existing?.name || `Screen ${idx + 1}`,
+              fileName: existing?.fileName || bs.screen_label || `screen-${idx + 1}.png`,
+              mimeType: existing?.mimeType || "image/png",
+              fileSize: existing?.fileSize || 0,
+              assetId: bs.screen_asset_id,
+              width: bs.width_px ?? existing?.width,
+              height: bs.height_px ?? existing?.height,
+              previewUrl: bs.download_url || existing?.previewUrl,
+            };
+          });
+          const firstScreenId = mappedScreens[0]?.id ?? "";
+          const remappedIssues = audit.issues.map((issue) => ({
+            ...issue,
+            screenIds: firstScreenId ? [firstScreenId] : issue.screenIds,
+            boundingBoxes: issue.boundingBoxes.map((bb) => ({
+              ...bb,
+              screenId: firstScreenId || bb.screenId,
+            })),
+          }));
+          updateAudit(audit.id, { screens: mappedScreens, issues: remappedIssues });
+        })
+        .catch(() => {});
+
+      if (audit.issues.length === 0) {
+        fetch(`/api/backend/projects/${audit.projectId}/audits/${audit.id}/findings`)
+          .then((res) => (res.ok ? res.json() : null))
+          .then((findingsList: ApiFinding[] | null) => {
+            if (!Array.isArray(findingsList) || findingsList.length === 0) return;
+            const targetScreenId = audit.screens[0]?.id ?? "";
+            const mappedIssues: DetectedIssue[] = findingsList.map((f, index) => ({
+              id: f.id,
+              number: index + 1,
+              title: f.title,
+              category: f.category,
+              severity: f.severity,
+              confidence: f.confidence,
+              description: f.description,
+              whyItMatters: f.why_it_matters,
+              recommendation: f.recommended_fix,
+              evidenceClass: f.evidence_type === "observed" ? "visual_observation" : "professional_guidance",
+              certainty: f.evidence_type === "observed" ? "observed" : "suspected",
+              evidence: f.evidence,
+              designPrinciple: f.design_principle,
+              limitations: f.limitations,
+              screenIds: targetScreenId ? [targetScreenId] : [],
+              boundingBoxes: (f.bounding_boxes || []).map((b) => ({
+                screenId: targetScreenId,
+                box: { x: b.x, y: b.y, width: b.width, height: b.height },
+              })),
+              selected: true,
+              isAiGenerated: true,
+            }));
+            updateAudit(audit.id, { issues: mappedIssues });
+            setSelectedIssues(mappedIssues.map((i) => i.id));
+          })
+          .catch(() => {});
+      }
+    }
 
     // Retrieve active prompt if already generated on backend
     fetch(`/api/backend/projects/${audit.projectId}/audits/${audit.id}/prompt`)
@@ -707,6 +784,8 @@ export function AuditWorkspace({ auditId }: { auditId: string }) {
               screenId={currentScreen.id}
               screenName={currentScreen.name}
               previewUrl={currentScreen.previewUrl}
+              widthPx={currentScreen.width}
+              heightPx={currentScreen.height}
               issues={visibleIssues}
               selectedIssueIds={selectedIssues}
               activeIssueId={activeIssueId}
