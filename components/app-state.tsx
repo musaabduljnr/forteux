@@ -10,7 +10,6 @@ import {
   type ReactNode,
 } from "react";
 import type { Audit, KnowledgeDocument, Project, UploadedScreen, User } from "@/lib/types";
-import { demoAudits, demoKnowledge, demoProjects, demoUser } from "@/lib/demo-data";
 
 interface ToastMessage {
   id: string;
@@ -58,7 +57,8 @@ interface PersistedState {
   user: User;
 }
 
-const STORAGE_KEY = "forteux-frontend-demo-v1";
+const STORAGE_KEY = "forteux-workspace-v2";
+const LEGACY_DEMO_STORAGE_KEY = "forteux-frontend-demo-v1";
 
 const AppStateContext = createContext<AppStateValue | null>(null);
 
@@ -70,16 +70,25 @@ function makeId(prefix: string): string {
 }
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
-  const [projects, setProjects] = useState<Project[]>(demoProjects);
-  const [audits, setAudits] = useState<Audit[]>(demoAudits);
-  const [documents, setDocuments] = useState<KnowledgeDocument[]>(demoKnowledge);
-  const [selectedProjectId, setSelectedProjectId] = useState(demoProjects[0].id);
-  const [user, setUser] = useState<User>(demoUser);
+  const DEFAULT_USER: User = {
+    id: "",
+    displayName: "",
+    email: "",
+    role: "",
+    avatarInitials: "",
+  };
+
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [audits, setAudits] = useState<Audit[]>([]);
+  const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [user, setUser] = useState<User>(DEFAULT_USER);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     try {
+      window.localStorage.removeItem(LEGACY_DEMO_STORAGE_KEY);
       const saved = window.localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved) as Partial<PersistedState>;
@@ -98,7 +107,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         if (parsed.user && typeof parsed.user.displayName === "string" && typeof parsed.user.email === "string") setUser(parsed.user);
       }
     } catch {
-      setToasts([{ id: makeId("toast"), message: "Saved demo data could not be loaded. The session will use sample data.", tone: "error" }]);
+      setToasts([{ id: makeId("toast"), message: "Saved session data could not be loaded.", tone: "error" }]);
     } finally {
       setHydrated(true);
     }
@@ -167,13 +176,13 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       projectId: input.projectId,
       name: input.name,
       mode: input.mode,
-      status: input.isDemo === false ? "ready" : "demo",
+      status: input.isDemo === true ? "demo" : "ready",
       createdAt: new Date().toISOString(),
       screens: input.screens,
       issues: [],
       context: input.context,
       analysisFocus: input.analysisFocus,
-      isDemo: input.isDemo ?? true,
+      isDemo: input.isDemo ?? false,
     };
     setAudits((current) => [audit, ...current]);
     return id;

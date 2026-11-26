@@ -55,6 +55,9 @@ from app.api.v1.schemas import (
     MultiScreenBoundingBoxRead,
     MultiScreenFindingRead,
     PaginatedAuditsResponse,
+    DashboardAuditItem,
+    DashboardProjectItem,
+    DashboardSummaryResponse,
     ProjectActivityEventRead,
     ProjectCreate,
     ProjectRead,
@@ -243,6 +246,192 @@ def read_current_user(
     if user is None:
         raise HTTPException(status_code=404, detail={"code": "user_not_found", "message": "User not found"})
     return {"id": user.id, "email": user.email, "display_name": user.display_name, "tenant_id": principal.tenant_id}
+
+
+@router.get("/dashboard/summary", response_model=DashboardSummaryResponse)
+def get_dashboard_summary(
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> DashboardSummaryResponse:
+    from sqlalchemy import func
+
+    total_projects = (
+        db.scalar(
+            select(func.count(func.distinct(Project.id)))
+            .join(Membership, Membership.tenant_id == Project.tenant_id)
+            .where(
+                Project.deleted_at.is_(None),
+                Membership.user_id == principal.id,
+                Membership.tenant_id == principal.tenant_id,
+            )
+        )
+        or 0
+    )
+
+    total_audits = (
+        db.scalar(
+            select(func.count(func.distinct(Audit.id)))
+            .join(Project, Project.id == Audit.project_id)
+            .join(Membership, Membership.tenant_id == Project.tenant_id)
+            .where(
+                Audit.tenant_id == principal.tenant_id,
+                Audit.deleted_at.is_(None),
+                Project.deleted_at.is_(None),
+                Membership.user_id == principal.id,
+                Membership.tenant_id == principal.tenant_id,
+            )
+        )
+        or 0
+    )
+
+    screens_analysed = (
+        db.scalar(
+            select(func.count(func.distinct(AuditScreen.id)))
+            .join(Audit, Audit.id == AuditScreen.audit_id)
+            .join(Project, Project.id == Audit.project_id)
+            .join(Membership, Membership.tenant_id == Project.tenant_id)
+            .where(
+                Audit.tenant_id == principal.tenant_id,
+                Audit.deleted_at.is_(None),
+                Audit.status == "completed",
+                Project.deleted_at.is_(None),
+                Membership.user_id == principal.id,
+                Membership.tenant_id == principal.tenant_id,
+            )
+        )
+        or 0
+    )
+
+    issues_identified = (
+        db.scalar(
+            select(func.count(func.distinct(Finding.id)))
+            .join(AnalysisJob, AnalysisJob.id == Finding.analysis_job_id)
+            .join(Audit, Audit.id == Finding.audit_id)
+            .join(Project, Project.id == Audit.project_id)
+            .join(Membership, Membership.tenant_id == Project.tenant_id)
+            .where(
+                Finding.tenant_id == principal.tenant_id,
+                AnalysisJob.status == "completed",
+                Audit.deleted_at.is_(None),
+                Audit.status == "completed",
+                Project.deleted_at.is_(None),
+                Membership.user_id == principal.id,
+                Membership.tenant_id == principal.tenant_id,
+            )
+        )
+        or 0
+    )
+
+    recent_audit_rows = db.execute(
+        select(Audit, Project.name)
+        .join(Project, Project.id == Audit.project_id)
+        .join(Membership, Membership.tenant_id == Project.tenant_id)
+        .where(
+            Audit.tenant_id == principal.tenant_id,
+            Audit.deleted_at.is_(None),
+            Project.deleted_at.is_(None),
+            Membership.user_id == principal.id,
+            Membership.tenant_id == principal.tenant_id,
+        )
+        .order_by(Audit.created_at.desc())
+        .limit(4)
+    ).all()
+
+    recent_audits: list[DashboardAuditItem] = []
+    for audit, project_name in recent_audit_rows:
+        screen_count = (
+            db.scalar(
+                select(func.count(func.distinct(AuditScreen.id))).where(
+                    AuditScreen.audit_id == audit.id,
+                    AuditScreen.tenant_id == principal.tenant_id,
+                )
+            )
+            or 0
+        )
+        finding_count = (
+            db.scalar(
+                select(func.count(func.distinct(Finding.id)))
+                .join(AnalysisJob, AnalysisJob.id == Finding.analysis_job_id)
+                .where(
+                    Finding.audit_id == audit.id,
+                    Finding.tenant_id == principal.tenant_id,
+                    AnalysisJob.status == "completed",
+                )
+            )
+            or 0
+        )
+        recent_audits.append(
+            DashboardAuditItem(
+                id=audit.id,
+                project_id=audit.project_id,
+                project_name=project_name,
+                name=audit.name,
+                mode=audit.mode,
+                status=audit.status,
+                created_at=audit.created_at,
+                screen_count=screen_count,
+                finding_count=finding_count,
+            )
+        )
+
+    recent_project_rows = list(
+        db.scalars(
+            select(Project)
+            .join(Membership, Membership.tenant_id == Project.tenant_id)
+            .where(
+                Project.deleted_at.is_(None),
+                Membership.user_id == principal.id,
+                Membership.tenant_id == principal.tenant_id,
+            )
+            .order_by(Project.updated_at.desc())
+            .limit(3)
+        )
+    )
+
+    recent_projects: list[DashboardProjectItem] = []
+    for project in recent_project_rows:
+        p_audit_count = (
+            db.scalar(
+                select(func.count(func.distinct(Audit.id))).where(
+                    Audit.project_id == project.id,
+                    Audit.tenant_id == principal.tenant_id,
+                    Audit.deleted_at.is_(None),
+                )
+            )
+            or 0
+        )
+        p_screen_count = (
+            db.scalar(
+                select(func.count(func.distinct(AuditScreen.id)))
+                .join(Audit, Audit.id == AuditScreen.audit_id)
+                .where(
+                    Audit.project_id == project.id,
+                    Audit.tenant_id == principal.tenant_id,
+                    Audit.deleted_at.is_(None),
+                )
+            )
+            or 0
+        )
+        recent_projects.append(
+            DashboardProjectItem(
+                id=project.id,
+                name=project.name,
+                description=project.description,
+                archived_at=project.archived_at,
+                updated_at=project.updated_at,
+                audit_count=p_audit_count,
+                screen_count=p_screen_count,
+            )
+        )
+
+    return DashboardSummaryResponse(
+        total_audits=total_audits,
+        screens_analysed=screens_analysed,
+        issues_identified=issues_identified,
+        total_projects=total_projects,
+        recent_audits=recent_audits,
+        recent_projects=recent_projects,
+    )
 
 
 @router.get("/projects", response_model=list[ProjectRead])

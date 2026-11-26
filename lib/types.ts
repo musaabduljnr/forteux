@@ -443,4 +443,38 @@ export interface AuditRead {
   mode: 'single' | 'multi';
   status: string;
   created_at: string;
+  /** Optional summary counts — may be returned by the API for dashboard views */
+  screen_count?: number | null;
+  finding_count?: number | null;
+}
+
+export interface DashboardAuditItem {
+  id: string;
+  project_id: string;
+  project_name: string;
+  name: string;
+  mode: 'single' | 'multi';
+  status: string;
+  created_at: string;
+  screen_count: number;
+  finding_count: number;
+}
+
+export interface DashboardProjectItem {
+  id: string;
+  name: string;
+  description: string | null;
+  archived_at: string | null;
+  updated_at: string;
+  audit_count: number;
+  screen_count: number;
+}
+
+export interface DashboardSummaryResponse {
+  total_audits: number;
+  screens_analysed: number;
+  issues_identified: number;
+  total_projects: number;
+  recent_audits: DashboardAuditItem[];
+  recent_projects: DashboardProjectItem[];
 }

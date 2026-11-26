@@ -671,4 +671,35 @@ class PaginatedAuditsResponse(BaseModel):
     page_size: int
 
 
+class DashboardAuditItem(BaseModel):
+    id: UUID
+    project_id: UUID
+    project_name: str
+    name: str
+    mode: str
+    status: str
+    created_at: datetime
+    screen_count: int = 0
+    finding_count: int = 0
+
+
+class DashboardProjectItem(BaseModel):
+    id: UUID
+    name: str
+    description: str | None = None
+    archived_at: datetime | None = None
+    updated_at: datetime
+    audit_count: int = 0
+    screen_count: int = 0
+
+
+class DashboardSummaryResponse(BaseModel):
+    total_audits: int = 0
+    screens_analysed: int = 0
+    issues_identified: int = 0
+    total_projects: int = 0
+    recent_audits: list[DashboardAuditItem] = Field(default_factory=list)
+    recent_projects: list[DashboardProjectItem] = Field(default_factory=list)
+
+
 

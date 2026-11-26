@@ -65,8 +65,11 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   if (path.some((part) => part === "." || part === ".." || part.includes("\\"))) {
     return NextResponse.json({ error: { code: "invalid_path", message: "Invalid API path" } }, { status: 400 });
   }
-  const prefix = base.pathname.endsWith("/") ? base.pathname : `${base.pathname}/`;
-  base.pathname = `${prefix}${path.map(encodeURIComponent).join("/")}`;
+  const normalizedBasePath = base.pathname.replace(/\/+$/, "");
+  const normalizedPathParts =
+    normalizedBasePath.endsWith("/v1") && path[0] === "v1" ? path.slice(1) : path;
+  const prefix = normalizedBasePath ? `${normalizedBasePath}/` : "/";
+  base.pathname = `${prefix}${normalizedPathParts.map(encodeURIComponent).join("/")}`;
   base.search = request.nextUrl.search;
 
   const contentLength = Number(request.headers.get("content-length") ?? 0);

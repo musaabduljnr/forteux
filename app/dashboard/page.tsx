@@ -4,59 +4,96 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import type { User } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
-import { useAppState } from "@/components/app-state";
 import { Icon } from "@/components/icons";
 import { Badge, Button, EmptyState, MetricCard, PageHeader, SectionTitle } from "@/components/ui";
-import { formatDate } from "@/lib/demo-data";
+import type { DashboardAuditItem, DashboardProjectItem, DashboardSummaryResponse } from "@/lib/types";
+
+function formatDate(iso?: string | null) {
+  if (!iso) return "—";
+  try {
+    return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" }).format(new Date(iso));
+  } catch {
+    return iso;
+  }
+}
+
+interface DashboardStats {
+  totalAudits: number;
+  screensAnalysed: number;
+  issuesIdentified: number;
+  totalProjects: number;
+}
 
 export default function DashboardPage() {
-  const { audits, projects, documents, user: appUser } = useAppState();
-  const [supabaseUser, setSupabaseUser] = useState<User | null>(null);
-  const [userProfileName, setUserProfileName] = useState<string>("");
-  const [todayDateStr, setTodayDateStr] = useState("");
-
   const supabase = createClient();
 
-  useEffect(() => {
-    // Format current date
-    const now = new Date();
-    const options: Intl.DateTimeFormatOptions = { weekday: "long", year: "numeric", month: "long", day: "numeric" };
-    setTodayDateStr(now.toLocaleDateString(undefined, options));
+  const [supabaseUser, setSupabaseUser] = useState<User | null>(null);
+  const [profileName, setProfileName] = useState("");
+  const [todayDateStr, setTodayDateStr] = useState("");
 
-    async function loadProfile() {
+  const [recentAudits, setRecentAudits] = useState<DashboardAuditItem[]>([]);
+  const [recentProjects, setRecentProjects] = useState<DashboardProjectItem[]>([]);
+  const [stats, setStats] = useState<DashboardStats>({
+    totalAudits: 0,
+    screensAnalysed: 0,
+    issuesIdentified: 0,
+    totalProjects: 0,
+  });
+
+  const [loading, setLoading] = useState(true);
+  const [statsUnavailable, setStatsUnavailable] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const now = new Date();
+    setTodayDateStr(now.toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" }));
+
+    async function bootstrap() {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         setSupabaseUser(user);
-        const name =
-          user.user_metadata?.full_name ||
-          user.user_metadata?.name ||
-          user.email?.split("@")[0] ||
-          "";
-        if (name) setUserProfileName(name);
+        const metaName = user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split("@")[0] || "";
+        setProfileName(metaName);
+        const { data: profile } = await supabase.from("profiles").select("full_name").eq("id", user.id).single();
+        if (profile?.full_name) setProfileName(profile.full_name);
+      } else {
+        setLoading(false);
+        return;
+      }
 
-        const { data: profile } = await supabase
-          .from("profiles")
-          .select("full_name")
-          .eq("id", user.id)
-          .single();
-
-        if (profile?.full_name) {
-          setUserProfileName(profile.full_name);
+      try {
+        const res = await fetch("/api/backend/dashboard/summary");
+        if (res.status === 401) {
+          setStatsUnavailable(true);
+          return;
         }
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const summary = (await res.json()) as DashboardSummaryResponse;
+        setRecentAudits(summary.recent_audits ?? []);
+        setRecentProjects(summary.recent_projects ?? []);
+        setStats({
+          totalAudits: summary.total_audits ?? 0,
+          screensAnalysed: summary.screens_analysed ?? 0,
+          issuesIdentified: summary.issues_identified ?? 0,
+          totalProjects: summary.total_projects ?? 0,
+        });
+      } catch (err) {
+        setStatsUnavailable(true);
+        setError(err instanceof Error ? err.message : "Could not load dashboard data");
+      } finally {
+        setLoading(false);
       }
     }
-    loadProfile();
-  }, [supabase]);
 
-  const recentAudits = audits.slice(0, 4);
-  const recentProjects = projects.slice(0, 3);
-  const readyDocuments = documents.filter((document) => document.status === "ready").length;
-  const screensAnalysed = audits.reduce((total, audit) => total + audit.screens.length, 0);
-  const issuesFound = audits.reduce((total, audit) => total + audit.issues.length, 0);
+    void bootstrap();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const greetingName = userProfileName
-    ? userProfileName.split(" ")[0]
-    : appUser.displayName.split(" ")[0] || "Designer";
+  const greetingName = profileName.trim().split(/\s+/)[0] || "Designer";
+  const hasAudits = recentAudits.length > 0;
+  const hasProjects = recentProjects.length > 0;
 
   return (
     <div className="page-stack">
@@ -65,7 +102,7 @@ export default function DashboardPage() {
           eyebrow={todayDateStr || "Today"}
           title={`Welcome back, ${greetingName}`}
           description="Turn your interface screens into clearer, more confident design decisions."
-          action={<Button href="/audits/new" icon="plus">New audit</Button>}
+          action={<Button href="/audits/new" icon="plus">{hasAudits ? "New audit" : "Start your first audit"}</Button>}
         />
         <div className="welcome-mark">
           <span className="welcome-spark"><Icon name="spark" size={24} /></span>
@@ -74,29 +111,64 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {!supabaseUser && (
+      {!loading && !supabaseUser && (
         <div className="demo-notice">
           <span>
-            <strong>Local workspace mode</strong> Sign in with Supabase Auth or Google OAuth to persist audits to the cloud.
+            <strong>Sign in required.</strong> Sign in to view your projects and audits.
           </span>
           <Link href="/login">Sign in <Icon name="arrow" size={14} /></Link>
+        </div>
+      )}
+
+      {error && (
+        <div className="demo-notice">
+          <span><strong>Dashboard metrics unavailable.</strong> {error}</span>
         </div>
       )}
 
       <section>
         <SectionTitle title="Your overview" description="A snapshot of activity across your workspace." />
         <div className="metrics-grid">
-          <MetricCard label="Total audits" value={audits.length} detail={audits.length === 1 ? "1 audit created" : `${audits.length} audits created`} icon="eye" tint="blue" />
-          <MetricCard label="Screens analysed" value={screensAnalysed} detail={screensAnalysed === 1 ? "1 screen total" : `${screensAnalysed} screens total`} icon="image" tint="green" />
-          <MetricCard label="Issues identified" value={issuesFound} detail={issuesFound === 1 ? "1 issue recorded" : `${issuesFound} issues recorded`} icon="warning" tint="amber" />
-          <MetricCard label="Projects" value={projects.length} detail={projects.length === 1 ? "1 active project" : `${projects.length} active projects`} icon="folder" tint="violet" />
+          <MetricCard
+            label="Total audits"
+            value={loading || statsUnavailable ? "—" : stats.totalAudits}
+            detail={loading ? "Loading…" : statsUnavailable ? "Unavailable" : stats.totalAudits === 1 ? "1 audit created" : `${stats.totalAudits} audits created`}
+            icon="eye"
+            tint="blue"
+          />
+          <MetricCard
+            label="Screens analysed"
+            value={loading || statsUnavailable ? "—" : stats.screensAnalysed}
+            detail={loading ? "Loading…" : statsUnavailable ? "Unavailable" : stats.screensAnalysed === 1 ? "1 screen analysed" : `${stats.screensAnalysed} screens analysed`}
+            icon="image"
+            tint="green"
+          />
+          <MetricCard
+            label="Issues identified"
+            value={loading || statsUnavailable ? "—" : stats.issuesIdentified}
+            detail={loading ? "Loading…" : statsUnavailable ? "Unavailable" : stats.issuesIdentified === 1 ? "1 issue identified" : `${stats.issuesIdentified} issues identified`}
+            icon="warning"
+            tint="amber"
+          />
+          <MetricCard
+            label="Projects"
+            value={loading || statsUnavailable ? "—" : stats.totalProjects}
+            detail={loading ? "Loading…" : statsUnavailable ? "Unavailable" : stats.totalProjects === 1 ? "1 project" : `${stats.totalProjects} projects`}
+            icon="folder"
+            tint="violet"
+          />
         </div>
       </section>
 
       <div className="dashboard-grid">
         <section className="panel recent-audits-panel">
-          <SectionTitle title="Recent audits" action={<Link className="inline-link" href="/history">View history <Icon name="arrow" size={15} /></Link>} />
-          {recentAudits.length > 0 ? (
+          <SectionTitle
+            title="Recent audits"
+            action={<Link className="inline-link" href="/history">View history <Icon name="arrow" size={15} /></Link>}
+          />
+          {loading ? (
+            <p style={{ padding: "2rem", textAlign: "center", opacity: 0.6 }}>Loading…</p>
+          ) : hasAudits ? (
             <div className="table-scroll">
               <table className="data-table">
                 <thead>
@@ -105,7 +177,7 @@ export default function DashboardPage() {
                     <th>Mode</th>
                     <th>Screens</th>
                     <th>Issues</th>
-                    <th>Updated</th>
+                    <th>Created</th>
                     <th>Status</th>
                     <th><span className="visually-hidden">Open</span></th>
                   </tr>
@@ -115,13 +187,21 @@ export default function DashboardPage() {
                     <tr key={audit.id}>
                       <td>
                         <Link href={`/audits/${audit.id}`} className="table-primary">{audit.name}</Link>
-                        <span className="table-subtitle">{projects.find((project) => project.id === audit.projectId)?.name ?? "Project"}</span>
+                        <span className="table-subtitle">
+                          <Link href={`/projects/${audit.project_id}`} style={{ color: "inherit", textDecoration: "none" }}>
+                            {audit.project_name}
+                          </Link>
+                        </span>
                       </td>
                       <td>{audit.mode === "multi" ? "Multi-screen" : "Single screen"}</td>
-                      <td>{audit.screens.length}</td>
-                      <td>{audit.issues.length || "—"}</td>
-                      <td>{formatDate(audit.createdAt)}</td>
-                      <td><Badge tone="demo">Active</Badge></td>
+                      <td>{audit.screen_count}</td>
+                      <td>{audit.finding_count}</td>
+                      <td>{formatDate(audit.created_at)}</td>
+                      <td>
+                        <Badge tone={audit.status === "completed" ? "success" : "neutral"}>
+                          {audit.status}
+                        </Badge>
+                      </td>
                       <td>
                         <Link href={`/audits/${audit.id}`} aria-label={`Open ${audit.name}`} className="icon-button table-open">
                           <Icon name="arrow" size={16} />
@@ -135,23 +215,30 @@ export default function DashboardPage() {
           ) : (
             <EmptyState
               icon="eye"
-              title="No audits yet"
-              description="Your audits will appear here once you upload and analyse a screen."
-              action={<Button href="/audits/new" variant="secondary" icon="plus">Start an audit</Button>}
+              title="Your workspace is ready."
+              description="Start your first UI/UX audit to see your findings, projects, and design insights here."
+              action={<Button href="/audits/new" variant="secondary" icon="plus">Start your first audit</Button>}
             />
           )}
         </section>
 
         <section className="panel projects-panel">
-          <SectionTitle title="Projects" action={<Link className="inline-link" href="/projects">All projects <Icon name="arrow" size={15} /></Link>} />
-          {recentProjects.length > 0 ? (
+          <SectionTitle
+            title="Projects"
+            action={<Link className="inline-link" href="/projects">All projects <Icon name="arrow" size={15} /></Link>}
+          />
+          {loading ? (
+            <p style={{ padding: "2rem", textAlign: "center", opacity: 0.6 }}>Loading…</p>
+          ) : hasProjects ? (
             <div className="project-list">
               {recentProjects.map((project, index) => (
                 <Link href={`/projects/${project.id}`} className="project-list-item" key={project.id}>
                   <span className={`project-avatar project-avatar-${index % 4}`}>{project.name.slice(0, 1).toUpperCase()}</span>
                   <span className="project-list-copy">
                     <strong>{project.name}</strong>
-                    <small>{audits.filter((audit) => audit.projectId === project.id).length} audits · Updated {formatDate(project.updatedAt)}</small>
+                    <small>
+                      {project.audit_count} {project.audit_count === 1 ? "audit" : "audits"} · Updated {formatDate(project.updated_at)}
+                    </small>
                   </span>
                   <Icon name="chevron" size={17} />
                 </Link>
@@ -167,23 +254,13 @@ export default function DashboardPage() {
             />
           )}
         </section>
-
-        <section className="panel knowledge-overview">
-          <SectionTitle title="Knowledge library" description="Reference material and design system guides." action={<Link className="inline-link" href="/knowledge">Manage library <Icon name="arrow" size={15} /></Link>} />
-          <div className="knowledge-summary">
-            <div className="knowledge-summary-icon"><Icon name="book" size={19} /></div>
-            <div>
-              <strong>{documents.length} reference documents</strong>
-              <span>{readyDocuments} ready for context retrieval</span>
-            </div>
-            <Button href="/knowledge" variant="secondary">Open library</Button>
-          </div>
-        </section>
       </div>
 
       <div className="dashboard-footnote">
         <Icon name="info" size={15} />
-        {supabaseUser ? "Connected to Supabase PostgreSQL with Row Level Security." : "Running with local workspace state. Sign in to sync across devices."}
+        {supabaseUser
+          ? "Connected to Supabase PostgreSQL with Row Level Security."
+          : "Sign in to sync your workspace across devices."}
       </div>
     </div>
   );
