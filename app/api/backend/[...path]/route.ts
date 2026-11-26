@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 const MAX_API_BODY_BYTES = 128 * 1024;
 const allowedMethods = new Set(["GET", "POST", "PATCH", "DELETE"]);
@@ -102,7 +103,7 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
       body,
       cache: "no-store",
       redirect: "manual",
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(60_000),
     });
     const responseHeaders = new Headers();
     const upstreamType = upstream.headers.get("content-type");
