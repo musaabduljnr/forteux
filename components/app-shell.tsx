@@ -64,10 +64,13 @@ export function AppShell({ children }: { children: ReactNode }) {
     .map((part: string) => part[0]?.toUpperCase() ?? "")
     .join("");
   const isWorkspace = pathname.startsWith("/audits/");
+  const isAuthPage = ["/login", "/register", "/forgot-password", "/reset-password", "/onboarding", "/auth"].some(
+    (route) => pathname === route || pathname.startsWith(`${route}/`)
+  );
 
-  if (pathname === "/") {
+  if (pathname === "/" || isAuthPage) {
     return (
-      <div className="public-landing-container">
+      <div className={pathname === "/" ? "public-landing-container" : undefined}>
         {children}
         <div className="toast-region" aria-live="polite" aria-relevant="additions removals">
           {toasts.map((toast) => (

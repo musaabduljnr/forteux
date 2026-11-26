@@ -14,8 +14,8 @@
 | Phase | Description | Status | Details |
 |---|---|---|---|
 | **Phase 1** | Supabase Project, Schema & Auth | ✅ **COMPLETED** | Project `edlkpfrlsrgslcdwjykv` linked, 20 tables created, RLS enabled, `forteux-private-assets` bucket created, security hardening applied. |
-| **Phase 2** | FastAPI Backend Deployment | ⏳ **NEXT UP** | Deploy container via [backend/Dockerfile](file:///c:/Users/Musa%20A.%20Abubakar/Desktop/forteux/backend/Dockerfile) to Railway / Cloud Run with Supabase pooler connection. |
-| **Phase 3** | Vercel Frontend Deployment | ⏳ **PENDING** | Connect GitHub repo to Vercel, configure environment variables, deploy, and bind domains. |
+| **Phase 2** | FastAPI Backend Deployment | ✅ **COMPLETED** | `forteux-api` deployed to Render (`srv-dc3tnbl9el5s739kfk4g`) via Blueprint sync. Live at https://forteux-api.onrender.com. Deploy `dep-dc3tnbt9el5s739kfldg` status: **live**. Deployed: 2026-11-26. |
+| **Phase 3** | Vercel Frontend Deployment | ✅ **COMPLETED** | Deployed at https://forteux-app-musaabduljnr-gmailcoms-projects.vercel.app (SMOKE-01 verified: `/`, `/login`, `/register` HTTP 200; `/dashboard` HTTP 307; `/api/backend/projects` HTTP 401). |
 | **Phase 4** | Production Smoke Testing | ⏳ **PENDING** | Verify user registration, Google OAuth, onboarding, audit analysis, bounding boxes, and exports. |
 | **Phase 5** | Production Monitoring & Alerting | ⏳ **PENDING** | Uptime monitoring on `/health/live` and Vercel Analytics setup. |
 
